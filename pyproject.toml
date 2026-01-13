@@ -21,3 +21,6 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 include = ["RLNF*"]
+
+[tool.setuptools.package-data]
+"RLNF" = ["resources/*.bin"]
