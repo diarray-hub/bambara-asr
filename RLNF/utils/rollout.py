@@ -88,7 +88,7 @@ def decode_batch(
         
         decoding_cfg = asr_model.cfg.decoding
         decoding_cfg.strategy = "pyctcdecode"
-        decoding_cfg.beam.beam_size = 32           
+        decoding_cfg.beam.beam_size = 8           
         decoding_cfg.beam.return_best_hypothesis = False
         decoding_cfg.ngram_lm_model = kenlm_path  
         decoding_cfg.ngram_lm_alpha = 0.5        
