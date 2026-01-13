@@ -8,6 +8,66 @@ from ..Rewards.reward_model import RewardModel
 from ..PPO.critic_network import CriticModel
 from ..Rewards.reward_processor import RewardModelProcessor
 
+import importlib.resources as rsc
+import RLNF.ressources
+
+
+def _mean_mean(T: torch.Tensor, indexes : torch.Tensor, only = True) -> Tuple[torch.Tensor] :
+    
+    """
+    Compute a 'mean of means' aggregation over grouped samples.
+
+    This function is designed for settings where multiple trajectories
+    (e.g. decoded hypotheses) belong to the same higher-level sample
+    (e.g. one audio), and we want each higher-level sample to contribute
+    equally, regardless of how many trajectories it has.
+
+    Args:
+        T:
+            Tensor of shape [B], containing per-trajectory values.
+            In PPO, this is typically the clipped surrogate objective
+            min(ratio * adv, clipped_ratio * adv).
+
+        indexes:
+            Tensor of shape [B], where indexes[b] indicates the group
+            (e.g. audio id) to which T[b] belongs.
+            All entries with the same index are averaged together.
+
+        only:
+            If True:
+                return (global_mean, global_std)
+                where statistics are computed over group-level means.
+            If False:
+                return (group_means, global_mean, global_std)
+
+    Returns:
+        If only=True:
+            mean_of_means:
+                Scalar tensor, average of per-group means.
+            std_of_means:
+                Scalar tensor, standard deviation of per-group means
+                (unbiased=False).
+
+        If only=False:
+            group_means:
+                Tensor of shape [N_groups], mean value for each group.
+            mean_of_means:
+                Scalar tensor.
+            std_of_means:
+                Scalar tensor.
+    """
+    unique_ids = torch.unique(indexes)
+    means = torch.empty_like(unique_ids, dtype=torch.float)
+    
+    for i, uid in enumerate(unique_ids) :
+        
+        means[i] = T[indexes == uid].mean()
+        
+    if only :
+    
+        return means.mean(), means.std(unbiased=False)
+    
+    return means, means.mean(), means.std(unbiased=False)
 
 @torch.no_grad()
 def decode_batch(
@@ -15,17 +75,37 @@ def decode_batch(
     enc_len: torch.Tensor,
     asr_model: EncDecCTCModel | EncDecCTCModelBPE,
     return_hypotheses: bool = False,
+    use_lm :  bool = True
 ) -> List[str]:
+    
     """
     Decode a batch of CTC log-probs [B, T, V] to text using NeMo's decoder.
     """
+    if use_lm :
+        
+        kenlm_path = rsc.files(RLNF.ressources) / "5gram_bambara.bin"
+        kenlm_path = str(kenlm_path) 
+        
+        decoding_cfg = asr_model.cfg.decoding
+        decoding_cfg.strategy = "pyctcdecode"
+        decoding_cfg.beam.beam_size = 32           
+        decoding_cfg.beam.return_best_hypothesis = False
+        decoding_cfg.ngram_lm_model = kenlm_path  
+        decoding_cfg.ngram_lm_alpha = 0.5        
+        decoding_cfg.beam.beta = 1.5
+        decoding_cfg.beam.search_type = "pyctcdecode"
+
+        asr_model.change_decoding_strategy(decoding_cfg)
+    
+    
     if hasattr(asr_model.decoding, "ctc_decoder_predictions_tensor"):
         hyps = asr_model.decoding.ctc_decoder_predictions_tensor(
-            decoder_outputs=log_probs, decoder_lengths=enc_len, return_hypotheses=return_hypotheses
+            decoder_outputs=log_probs, decoder_lengths=enc_len, fold_consecutive=False,return_hypotheses=return_hypotheses
         )
     else:
         raise AttributeError("Only CTC models are supported for now.")
-    return [h.text for h in hyps] if isinstance(hyps, list) else hyps
+    
+    return [[h.text for h in hyp] for hyp in hyps] if isinstance(hyps, list) else hyps
 
 
 def _blank_index(asr_model: EncDecCTCModel) -> int:
@@ -144,6 +224,19 @@ def collect_batch(
     reward_model.to(device)
     critic.to(device)
     asr_model.to(device)
+    
+    R = [] #Rewards.
+    V = [] #Values.
+    K = [] #numbers of trajectories of each audios.
+  
+    TARGETS = []
+    TARGET_LENS =[]
+    AUDIO = []
+    AUDIO_LENS = []
+    INPUT_LENS = []
+  
+
+    LOG_OLD = []
 
     with torch.no_grad():
         # Forward actor -> CTC log-probs and encoded lengths
@@ -165,48 +258,94 @@ def collect_batch(
 
         # Decode to text (for reward model & diagnostics)
         transcriptions = decode_batch(log_probs3d, enc_len, asr_model)
+        
+        for i, tra in enumerate(transcriptions) :
+        
+            tran = processor.tokenizer.batch_encode_plus(tra, return_attention_mask=True, padding=True, return_tensors="pt")
+            
+            tgt_lists, tgt_lens_list = _encode_texts_for_ctc(asr_model, tra)
+            tgt_tensors = [torch.tensor(x, dtype=torch.long) for x in tgt_lists]
+            tgt_padded = pad_sequence(tgt_tensors, batch_first=True, padding_value=0).to(device=device)  # [B, Lmax]
+            tgt_lens = torch.tensor(tgt_lens_list, dtype=torch.long, device=device)              # [B]
+            
+            K_i = len(tra)
+        
 
-        # === Reward model tokenization (kept as in your original design) ===
-        tra = processor.tokenizer.batch_encode_plus(transcriptions, return_attention_mask=True, padding=True, return_tensors="pt")
-        
-        reward_model_input = {
-            "audio" : audios,
-            "audio_len" : audio_lens, 
-            "text" : tra["input_ids"],
-            "text_attention_mask" : tra["attention_mask"]
-        }
-        
-        critic_model_input = {
-            "audio" : audios
+            audio_i = audios[i]              # [T, F]
+            audio = audio_i.unsqueeze(0).repeat(K_i, 1, 1)   # [K_i, T, F]
+
+            audio_len = audio_lens[i].expand(K_i)
+
+            
+            reward_model_input = {
+                "audio": audio,
+                "audio_len": audio_len,
+                "text": tran["input_ids"],
+                "text_attention_mask": tran["attention_mask"],
             }
+
+            critic_model_input = {
+                "audio": audio
+            }
+            
+            reward_model_input = {k: v.to(device) if torch.is_tensor(v) else v for k, v in reward_model_input.items()}
+            critic_model_input = {k: v.to(device) if torch.is_tensor(v) else v for k, v in critic_model_input.items()}
+
+            reward = reward_model(**reward_model_input).logits
+            values = critic(**critic_model_input)
+            
+            
+            # 5. Log-prob CTC (old policy)
+            logp_i = log_probs3d[i]          # [T_enc, V]
+            len_i  = enc_len[i]              # scalar
+
+            logp_i = logp_i.unsqueeze(0).repeat(K_i, -1, -1)   # [K_i, T_enc, V]
+            len_i  = len_i.expand(K_i) 
+            
+            blank_idx = _blank_index(asr_model)
+                    
+            logp_old = _seq_logprob_ctc(logp_i, len_i, tgt_padded, tgt_lens, blank_idx).detach()
+
+            
+            K.append(K_i)
+            
+            TARGETS.append(tgt_padded)
+            TARGET_LENS.append(tgt_lens)
+            AUDIO.append(audio)
+            AUDIO_LENS.append(audio_len)
+            INPUT_LENS.append(len_i)
+            
+            R.append(reward)
+            V.append(values)
+            
+            LOG_OLD.append(logp_old)
         
-        reward_model_input = {k: v.to(device) if torch.is_tensor(v) else v for k, v in reward_model_input.items()}
-        critic_model_input = {k: v.to(device) if torch.is_tensor(v) else v for k, v in critic_model_input.items()}
+        audio_all = torch.cat(AUDIO, dim=0)              # [K_i, T, F]
+        audio_lens_all = torch.cat(AUDIO_LENS, dim=0)    # [K_i]
+
+        targets_all = torch.cat(TARGETS, dim=0)          # [K_i, Lmax]
+        target_lens_all = torch.cat(TARGET_LENS, dim=0)  # [K_i]
+
+        input_lens_all = torch.cat(INPUT_LENS, dim=0)    # [K_i]
+
+        logp_old_all = torch.cat(LOG_OLD, dim=0)          # [K_i]
+        reward_all = torch.cat(R, dim=0)                  # [K_i]
+        values_all = torch.cat(V, dim=0)
         
-        # Compute reward and values
-        reward = reward_model(**reward_model_input).logits #reward_model(audio, audio_lens, rm_text_batch.to(device), rm_text_lens.to(device)).cpu()  # [B]
-        values = critic(**critic_model_input) # [B]
-
-        # === PPO old log-prob via CTC forward-backward ===
-        # Map decoded text back to actor labels (no blanks)
-        tgt_lists, tgt_lens_list = _encode_texts_for_ctc(asr_model, transcriptions)
-        tgt_tensors = [torch.tensor(x, dtype=torch.long) for x in tgt_lists]
-        tgt_padded = pad_sequence(tgt_tensors, batch_first=True, padding_value=0).to(device)  # [B, Lmax] (pad won't be used)
-        tgt_lens = torch.tensor(tgt_lens_list, dtype=torch.long, device=device)              # [B]
-
-        blank_idx = _blank_index(asr_model)
-        logp_old = _seq_logprob_ctc(log_probs3d.to(device), enc_len.to(device), tgt_padded, tgt_lens.to(device), blank_idx).detach()  # [B]
-
+        indexes = torch.repeat_interleave(torch.arange(len(K)), torch.Tensor(K))
+        
     # Return CPU payload only; keep raw text too (tiny memory footprint)
     return {
-        "audio_batch": audios.cpu(),
-        "audio_lengths": audio_lens.cpu(),
-        "targets": tgt_padded.cpu(),          # [B, Lmax] (for PPO update)
-        "target_lengths": tgt_lens.cpu(),     # [B]
-        "input_lengths": enc_len.cpu(),       # [B] (time steps at CTC head)
-        "log_probs_old": logp_old.cpu(),      # [B]
-        "reward": reward.cpu(),               # [B]
-        "values": values.cpu(),               # [B]
+        "audio_batch": audio_all.cpu(),
+        "audio_lengths": audio_lens_all.cpu(),
+        "targets": targets_all.cpu(),          # [K_i, Lmax] (for PPO update)
+        "target_lengths": target_lens_all.cpu(),     # [K_i]
+        "input_lengths": input_lens_all.cpu(),       # [K_i] (time steps at CTC head)
+        "log_probs_old": logp_old_all.cpu(),      # [K_i]
+        "reward": reward_all.cpu(),               # [K_i]
+        "values": values_all.cpu(),               # [K_i]
         "texts": transcriptions,              # keep raw strings for reward/debug
+        "indexes" : indexes.cpu(),
+        #
         # reward model text batch is not needed after reward is computed; not stored
     }
