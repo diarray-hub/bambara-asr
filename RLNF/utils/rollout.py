@@ -370,8 +370,7 @@ def collect_batch(
 
         # Decode to text (for reward model & diagnostics)
         transcriptions = decode_batch(log_probs3d, enc_len, asr_model)
-        
-        print(transcriptions)
+
         
         for i, tra in enumerate(transcriptions) :
         
