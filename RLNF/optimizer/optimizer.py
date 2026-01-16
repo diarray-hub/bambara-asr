@@ -77,6 +77,7 @@ class PPOOptimizer:
         
         adv, rewards_centered, mode = ppo_group_statistics(reward=reward, values_old=values_old, indexes=indexes)
         
+        
         if not _same_num_hypotheses(indexes=indexes) :
 
             #adv_mean, adv_std = _mean_mean(adv, indexes)
@@ -230,7 +231,6 @@ class PPOOptimizer:
             "actor_loss": float(loss_actor.detach().cpu().item()),
             "critic_loss": float(loss_critic.detach().cpu().item()),
             "mean_value": float(V_hat.detach().mean().cpu().item()),
-            "mode" : mode
         }
         out_stats.update(diag)
         return out_stats
