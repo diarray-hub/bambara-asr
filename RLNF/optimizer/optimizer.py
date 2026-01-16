@@ -37,7 +37,9 @@ class PPOOptimizer:
 
         self.actor.train()
         self.critic.train()
-        self._blank_idx = _blank_index(self.actor)
+        #self._blank_idx = _blank_index(self.actor)
+        actor_for_blank = self.actor.module if hasattr(self.actor, "module") else self.actor
+        self._blank_idx = _blank_index(actor_for_blank)
 
         # If you're on CUDA with bf16/fp16 AMP, this will be enabled upstream when amp=True
         # (PyTorch 2.4+ has torch.amp; older uses torch.cuda.amp — keep to your env)
