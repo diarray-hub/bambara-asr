@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from nemo.collections.asr.models import EncDecCTCModel, EncDecCTCModelBPE
 from ..loss.ppo_loss import PPOLoss 
 from ..PPO.critic_network import CriticModel
-from ..utils.rollout import _blank_index, _seq_logprob_ctc, _ensure_log_softmax, _mean_mean
+from ..utils.rollout import _blank_index, _seq_logprob_ctc, _ensure_log_softmax, _mean_mean, ppo_group_statistics, _normalize_adv, _same_num_hypotheses
 
 
 class PPOOptimizer:
@@ -43,55 +43,6 @@ class PPOOptimizer:
         # (PyTorch 2.4+ has torch.amp; older uses torch.cuda.amp — keep to your env)
         self._scaler = torch.amp.GradScaler(enabled=amp)
 
-    @staticmethod
-    def _normalize_adv(adv: torch.Tensor, indexes : torch.Tensor, eps : float = 1e-8) -> torch.Tensor:
-        
-        """
-        Normalize advantages independently for each group.
-
-        This function performs per-group (e.g. per-audio) advantage normalization.
-        All trajectories belonging to the same group are normalized using
-        that group's mean and standard deviation.
-
-        This is important in settings where each higher-level sample (audio)
-        produces a variable number of trajectories (e.g. multiple decoded texts),
-        and we want normalization to respect group boundaries.
-
-        Args:
-            adv:
-                Tensor of shape [B], containing raw advantage values
-                (e.g. A = R - V).
-
-            indexes:
-                Tensor of shape [B], where indexes[b] indicates the group
-                (e.g. audio id) to which adv[b] belongs.
-
-            eps:
-                Small constant added to the denominator for numerical stability.
-
-        Returns:
-            A_norm:
-                Tensor of shape [B], containing normalized advantages.
-                For each group i:
-                    mean(A_norm[indexes == i]) ≈ 0
-                    std(A_norm[indexes == i]) ≈ 1
-        """
-             
-        N = indexes.max().item() + 1
-        
-        A_norm = torch.empty_like(adv)
-        
-        for i in range(N) : 
-            
-            A_i = adv[indexes == i]
-            
-            mean = A_i.mean()
-            std = A_i.std(unbiased=False)
-            
-            A_norm[indexes == i ] = (A_i - mean) / (std + eps)
-            
-        return A_norm
-
     def update(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
         """
         Perform K PPO updates on the provided batch.
@@ -117,15 +68,25 @@ class PPOOptimizer:
         reward = batch["reward"].to(self.device, non_blocking=True)
         values_old = batch["values"].to(self.device, non_blocking=True)
         
-        indexes = batch["indexes"]
+        indexes = batch["indexes"].to(device=self.device)
 
         # Old advantages (on-policy): use stored old values for stability
-        adv = self._normalize_adv(reward - values_old, indexes = indexes).detach()
+        #adv = self._normalize_adv(reward - values_old, indexes = indexes).detach()
         
-        adv_mean, adv_std = _mean_mean(adv, indexes)
-        logp_old_mean, _ = _mean_mean(logp_old, indexes)
-        rewards_means ,rewards_mean, _ = _mean_mean(reward, indexes, only=False)
-        values_old_mean, _ = _mean_mean(values_old, indexes)
+        adv, rewards_centered, mode = ppo_group_statistics(reward=reward, values_old=values_old, indexes=indexes)
+        
+        if not _same_num_hypotheses(indexes=indexes) :
+
+            #adv_mean, adv_std = _mean_mean(adv, indexes)
+            logp_old_mean, _ = _mean_mean(logp_old, indexes)
+            rewards_mean, _ = _mean_mean(reward, indexes)
+            values_old_mean, _ = _mean_mean(values_old, indexes)
+            
+        else :
+            #adv_mean, adv_std = adv.mean(), adv.std(unbiased=False)
+            logp_old_mean = logp_old.mean()
+            rewards_mean = reward.mean()
+            values_old_mean = values_old.mean()
 
         self.actor.train()
         self.critic.train()
@@ -159,8 +120,8 @@ class PPOOptimizer:
                         "mean_value": float("nan"),
                         "ratio_mean": float("nan"),
                         "frac_clipped": 0.0,
-                        "adv_mean": float(adv_mean.cpu()),
-                        "adv_std": float(adv_std.cpu()),
+                        "adv_mean": float(adv.mean().cpu()),
+                        "adv_std": float(adv.std().cpu()),
                         "logp_old_mean": float(logp_old_mean.cpu()),
                         "logp_new_mean": float("nan"),
                         "reward_mean": float(rewards_mean.cpu()),
@@ -197,32 +158,49 @@ class PPOOptimizer:
                     ent = -(logp3d_new.exp() * logp3d_new).sum(dim=(1, 2)).mean()
                     loss_actor = loss_actor - self.entropy_coef * ent
 
-                rewards_centered = rewards_means[indexes]
+                #rewards_centered = rewards_means[indexes]
                 # Critic loss vs actual reward
                 loss_critic = F.mse_loss(V_hat, rewards_centered)
                 
-                logp_new_mean, _ = _mean_mean(logp_new, indexes)
+                if not _same_num_hypotheses(indexes=indexes) :
+                    
+                    logp_new_mean, _ = _mean_mean(logp_new, indexes)
+                
+                else :
+                    logp_new_mean =  logp_new.mean()
+                    
 
                 # Diagnostics
                 with torch.no_grad():
                     ratio = torch.exp(logp_new - logp_old)
+                    
                     # Ignore invalid rows for clipping stat
                     ratio_valid = ratio[valid] if valid.any() else ratio
-                    frac_clipped = (
-                        ((ratio_valid > 1.0 + self.ppo_loss.clip_eps) | (ratio_valid < 1.0 - self.ppo_loss.clip_eps))
-                        .float()
-                        .mean()
-                        .item()
-                        if ratio_valid.numel() > 0 else 0.0
-                    )
+                    
+                    if not _same_num_hypotheses(indexes=indexes):
+                        # Mean-of-means par audio
+                        ratio_means, ratio_mean, ratio_std = _mean_mean(ratio_valid, indexes, only=False)
+                        ratio_for_diag = ratio_means[indexes] 
+                        frac_clipped = ((ratio_for_diag > 1.0 + self.ppo_loss.clip_eps) |
+                                        (ratio_for_diag < 1.0 - self.ppo_loss.clip_eps)).float().mean().item()
+                        ratio_mean_diag = ratio_mean
+                    else:
+                        # Même hypothèse → simple moyenne
+                        ratio_mean_diag = ratio.mean().item()
+                        if ratio_valid.numel() > 0:
+                            frac_clipped = ((ratio_valid > 1.0 + self.ppo_loss.clip_eps) |
+                                            (ratio_valid < 1.0 - self.ppo_loss.clip_eps)).float().mean().item()
+                        else:
+                            frac_clipped = 0.0
+                            
                     diag = {
                         "adv_mean": float(adv.mean().cpu()),
-                        "adv_std": float(adv.std(unbiased=False).cpu()),
-                        "ratio_mean": float(ratio.mean().cpu()),
+                        "adv_std": float(adv.std().cpu()),
+                        "ratio_mean": float(ratio_mean_diag),
                         "frac_clipped": float(frac_clipped),
                         "logp_old_mean": float(logp_old_mean.cpu()),
                         "logp_new_mean": float(logp_new_mean.cpu()),
-                        "reward_mean": float(reward.mean().cpu()),
+                        "reward_mean": float(rewards_mean.cpu()),
                         "V_hat_mean": float(V_hat.mean().cpu()),
                     }
 
@@ -250,6 +228,7 @@ class PPOOptimizer:
             "actor_loss": float(loss_actor.detach().cpu().item()),
             "critic_loss": float(loss_critic.detach().cpu().item()),
             "mean_value": float(V_hat.detach().mean().cpu().item()),
+            "mode" : mode
         }
         out_stats.update(diag)
         return out_stats

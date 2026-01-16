@@ -7,7 +7,7 @@ from nemo.collections.asr.models import EncDecCTCModel, EncDecCTCModelBPE
 from ..Rewards.reward_model import RewardModel
 from ..PPO.critic_network import CriticModel
 from ..Rewards.reward_processor import RewardModelProcessor
-
+import torch.nn.functional as F
 import importlib.resources as rsc
 import RLNF.ressources
 
@@ -69,6 +69,118 @@ def _mean_mean(T: torch.Tensor, indexes : torch.Tensor, only = True) -> Tuple[to
     
     return means, means.mean(), means.std(unbiased=False)
 
+def _normalize_adv(adv: torch.Tensor, indexes : torch.Tensor, eps : float = 1e-8) -> torch.Tensor:
+    
+    """
+        Normalize advantages independently for each group.
+
+        This function performs per-group (e.g. per-audio) advantage normalization.
+        All trajectories belonging to the same group are normalized using
+        that group's mean and standard deviation.
+
+        This is important in settings where each higher-level sample (audio)
+        produces a variable number of trajectories (e.g. multiple decoded texts),
+        and we want normalization to respect group boundaries.
+
+        Args:
+            adv:
+                Tensor of shape [B], containing raw advantage values
+                (e.g. A = R - V).
+
+            indexes:
+                Tensor of shape [B], where indexes[b] indicates the group
+                (e.g. audio id) to which adv[b] belongs.
+
+            eps:
+                Small constant added to the denominator for numerical stability.
+
+        Returns:
+            A_norm:
+                Tensor of shape [B], containing normalized advantages.
+                For each group i:
+                    mean(A_norm[indexes == i]) ≈ 0
+                    std(A_norm[indexes == i]) ≈ 1
+    """
+             
+    N = indexes.max().item() + 1
+    
+    A_norm = torch.empty_like(adv)
+    
+    for i in range(N) : 
+        
+        A_i = adv[indexes == i]
+        
+        mean = A_i.mean()
+        std = A_i.std(unbiased=False)
+        
+        A_norm[indexes == i ] = (A_i - mean) / (std + eps)
+        
+    return A_norm
+    
+def _same_num_hypotheses(indexes: torch.Tensor) -> bool:
+    """
+    Check whether all groups (audios) have the same number of hypotheses.
+    """
+    _, counts = torch.unique(indexes, return_counts=True)
+    return torch.all(counts == counts[0]).item()
+
+def ppo_group_statistics(
+    reward: torch.Tensor,
+    values_old: torch.Tensor,
+    indexes: torch.Tensor,
+    eps: float = 1e-8,
+):
+    """
+    Compute advantages and critic targets depending on hypothesis structure.
+
+    Args:
+        reward:
+            Tensor [B], reward per hypothesis.
+        values_old:
+            Tensor [B], critic predictions (broadcasted if per-audio).
+        indexes:
+            Tensor [B], audio id for each hypothesis.
+        eps:
+            Numerical stability constant.
+
+    Returns:
+        adv:
+            Normalized advantages [B].
+        critic_target:
+            Target values for critic regression [B].
+        mode:
+            String describing which strategy was used.
+    """
+
+    same_hypo = _same_num_hypotheses(indexes)
+
+    # --------------------------------------------------
+    # CASE 1: Same number of hypotheses per audio
+    # --------------------------------------------------
+    if same_hypo:
+        # Classic PPO
+        adv = reward - values_old
+        adv = (adv - adv.mean()) / (adv.std(unbiased=False) + eps)
+
+        critic_target = reward
+        mode = "flat_hypotheses"
+
+    # --------------------------------------------------
+    # CASE 2: Variable number of hypotheses per audio
+    # --------------------------------------------------
+    else:
+        # Advantage normalized per audio
+        adv = reward - values_old
+        adv = _normalize_adv(adv, indexes, eps=eps)
+
+        # Critic target = mean reward per audio
+        rewards_means, _, _ = _mean_mean(reward, indexes, only=False)
+        critic_target = rewards_means[indexes]
+
+        mode = "grouped_by_audio"
+
+    return adv.detach(), critic_target.detach(), mode
+
 @torch.no_grad()
 def decode_batch(
     log_probs: torch.Tensor,
@@ -88,7 +200,7 @@ def decode_batch(
         
         decoding_cfg = asr_model.cfg.decoding
         decoding_cfg.strategy = "pyctcdecode"
-        decoding_cfg.beam.beam_size = 8           
+        decoding_cfg.beam.beam_size = 16           
         decoding_cfg.beam.return_best_hypothesis = False
         decoding_cfg.ngram_lm_model = kenlm_path  
         decoding_cfg.ngram_lm_alpha = 0.5        
@@ -193,7 +305,7 @@ def _seq_logprob_ctc(
     log_probs_tbv = log_probs_btv.permute(1, 0, 2).float()
     flat_targets_1d = _pack_targets_1d(targets_padded_bl, target_lengths_b).to(log_probs_btv.device)
 
-    ctc = nn.CTCLoss(blank=blank_idx, reduction="mean", zero_infinity=True)
+    ctc = nn.CTCLoss(blank=blank_idx, reduction="none", zero_infinity=True)
     nll = ctc(log_probs_tbv, flat_targets_1d, input_lengths_b.int(), target_lengths_b.int())  # [B]
     return -nll  # [B], sequence log-prob
 
@@ -259,6 +371,8 @@ def collect_batch(
         # Decode to text (for reward model & diagnostics)
         transcriptions = decode_batch(log_probs3d, enc_len, asr_model)
         
+        print(transcriptions)
+        
         for i, tra in enumerate(transcriptions) :
         
             tran = processor.tokenizer.batch_encode_plus(tra, return_attention_mask=True, padding=True, return_tensors="pt")
@@ -299,7 +413,7 @@ def collect_batch(
             logp_i = log_probs3d[i]          # [T_enc, V]
             len_i  = enc_len[i]              # scalar
 
-            logp_i = logp_i.unsqueeze(0).repeat(K_i, -1, -1)   # [K_i, T_enc, V]
+            logp_i = logp_i.unsqueeze(0).repeat(K_i, 1, 1)   # [K_i, T_enc, V]
             len_i  = len_i.expand(K_i) 
             
             blank_idx = _blank_index(asr_model)
@@ -319,11 +433,21 @@ def collect_batch(
             V.append(values)
             
             LOG_OLD.append(logp_old)
+            
+        
+        
+        
+        Lmax = max(t.size(1) for t in TARGETS)
+
+        TARGETS_padded = [
+            F.pad(t, (0, Lmax - t.size(1))) for t in TARGETS
+        ]
+        
         
         audio_all = torch.cat(AUDIO, dim=0)              # [K_i, T, F]
         audio_lens_all = torch.cat(AUDIO_LENS, dim=0)    # [K_i]
 
-        targets_all = torch.cat(TARGETS, dim=0)          # [K_i, Lmax]
+        targets_all = torch.cat(TARGETS_padded, dim=0)          # [K_i, Lmax]
         target_lens_all = torch.cat(TARGET_LENS, dim=0)  # [K_i]
 
         input_lens_all = torch.cat(INPUT_LENS, dim=0)    # [K_i]
@@ -332,7 +456,7 @@ def collect_batch(
         reward_all = torch.cat(R, dim=0)                  # [K_i]
         values_all = torch.cat(V, dim=0)
         
-        indexes = torch.repeat_interleave(torch.arange(len(K)), torch.Tensor(K))
+        indexes = torch.repeat_interleave(torch.arange(len(K)), torch.tensor(K, dtype=torch.long))
         
     # Return CPU payload only; keep raw text too (tiny memory footprint)
     return {

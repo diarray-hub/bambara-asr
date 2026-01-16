@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from RLNF.utils.rollout import _mean_mean
+from RLNF.utils.rollout import _mean_mean, _same_num_hypotheses
 
 def _clip_surrogate(ratio: torch.Tensor, adv: torch.Tensor, eps: float) -> torch.Tensor:
     """
@@ -48,7 +48,11 @@ class PPOLoss(nn.Module):
         # clipped surrogate
         clipped_obj = _clip_surrogate(ratio, advantages, self.clip_eps)
         
-        loss, _ = _mean_mean(clipped_obj, indexes)
-        
         # PPO loss is negative of the objective
-        return -loss
+        if _same_num_hypotheses(indexes=indexes) :
+            
+            return -clipped_obj.mean()
+        
+        else :
+            loss, _ = _mean_mean(clipped_obj, indexes)
+            return -loss
