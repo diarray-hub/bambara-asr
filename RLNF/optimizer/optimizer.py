@@ -83,13 +83,14 @@ class PPOOptimizer:
             #adv_mean, adv_std = _mean_mean(adv, indexes)
             logp_old_mean, _ = _mean_mean(logp_old, indexes)
             rewards_mean, _ = _mean_mean(reward, indexes)
-            values_old_mean, _ = _mean_mean(values_old, indexes)
+            #values_old_mean, _ = _mean_mean(values_old, indexes)
             
         else :
             #adv_mean, adv_std = adv.mean(), adv.std(unbiased=False)
             logp_old_mean = logp_old.mean()
             rewards_mean = reward.mean()
-            values_old_mean = values_old.mean()
+            
+        values_old_mean = values_old.mean()
 
         self.actor.train()
         self.critic.train()
