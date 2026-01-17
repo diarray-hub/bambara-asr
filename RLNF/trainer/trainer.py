@@ -296,7 +296,7 @@ class RLNFTrainer:
                 
                 audio = [aud for aud in batch["_audio"]]
                 hyps = actor.transcribe(audio, batch_size=8)
-                
+                """    
                 #hyp_texts = [[h.text for h in hyp] for hyp in hyps] #[h.text for h in hyps]
                 hyp_texts_flat = [h.text for hyps_per_audio in hyps for h in hyps_per_audio]
 
@@ -308,7 +308,22 @@ class RLNFTrainer:
                 refs_flat = []
                 for i, hyps_per_audio in enumerate(hyps):
                     n_hyps = len(hyps_per_audio)
-                    refs_flat.append([refs[i]] * n_hyps)
+                    refs_flat.extend([refs[i]] * n_hyps) 
+                """
+                
+                hyp_texts_flat = []
+                refs_flat = []
+                indexes_flat = []
+
+                refs = self.processor.tokenizer.batch_decode(
+                    batch["text"], skip_special_tokens=True
+                )
+
+                for audio_idx, hyps_per_audio in enumerate(hyps):
+                    for h in hyps_per_audio:
+                        hyp_texts_flat.append(h.text if hasattr(h, "text") else str(h))
+                        refs_flat.append(refs[audio_idx])
+                        indexes_flat.append(audio_idx)
 
                
                 
