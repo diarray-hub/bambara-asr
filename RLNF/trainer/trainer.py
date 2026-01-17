@@ -239,7 +239,7 @@ class RLNFTrainer:
                     # ---- validation pour tous les ranks (rank 0 log) ----
                     if do_val:
                         if self.is_main:
-                            self.validate(global_step, indexes=batch_dict["indexes"])
+                            self.validate(global_step)
                             self.save_checkpoint(global_step)
                             
                         if self.is_distributed:
@@ -258,7 +258,7 @@ class RLNFTrainer:
 
                 #self.validate(global_step, indexes=batch_dict["indexes"], end_of_epoch=True)
                 if self.is_main:
-                    self.validate(global_step, indexes=batch_dict["indexes"], end_of_epoch=True)
+                    self.validate(global_step, end_of_epoch=True)
                 if self.is_distributed:
                     dist.barrier()
 
@@ -274,7 +274,7 @@ class RLNFTrainer:
                 self.tb_writer.close()
 
 
-    def validate(self, step: int, indexes , end_of_epoch: bool = False):
+    def validate(self, step: int , end_of_epoch: bool = False):
         actor = self.ppo.actor.module if self.is_distributed else self.ppo.actor
         critic = self.ppo.critic.module if self.is_distributed else self.ppo.critic
 
@@ -304,6 +304,18 @@ class RLNFTrainer:
                 
                 hyp_texts = [[h.text for h in hyp] for hyp in hyps] #[h.text for h in hyps]
                 
+                val_dict = collect_batch(
+                    batch=batch,
+                    asr_model=actor,
+                    reward_model=self.reward_model,
+                    critic=critic,
+                    processor=self.processor,
+                    device=self.device,
+                    use_lm=self.use_lm,
+                    beam_size=self.beam_size
+                )
+                
+                indexes = val_dict["indexes"]
                 expanded = batch["text"][indexes]
                 
                 result = [
@@ -323,20 +335,11 @@ class RLNFTrainer:
                 wers.append(self._wer_cer(refs=refs, hyps=hyp_texts, indexes=indexes)[0])
                 cers.append(self._wer_cer(refs=refs, hyps=hyp_texts, indexes=indexes)[1])
 
-                val_dict = collect_batch(
-                    batch=batch,
-                    asr_model=actor,
-                    reward_model=self.reward_model,
-                    critic=critic,
-                    processor=self.processor,
-                    device=self.device,
-                    use_lm=self.use_lm,
-                    beam_size=self.beam_size
-                )
+               
 
                 batch_reward = (val_dict["reward"].mean() 
-                                if _same_num_hypotheses(indexes=val_dict["indexes"]) 
-                                else _mean_mean(val_dict["reward"], indexes=val_dict["indexes"])[0]
+                                if _same_num_hypotheses(indexes=indexes) 
+                                else _mean_mean(val_dict["reward"], indexes=indexes)[0]
                             )
                 
                 batch_value = val_dict["values"].mean()
