@@ -163,7 +163,7 @@ def ppo_group_statistics(
         adv = (adv - adv.mean()) / (adv.std(unbiased=False) + eps)
 
         critic_target = reward
-        mode = "flat_hypotheses"
+        mode = 0 #"flat_hypotheses"
 
     # --------------------------------------------------
     # CASE 2: Variable number of hypotheses per audio
@@ -177,7 +177,7 @@ def ppo_group_statistics(
         rewards_means, _, _ = _mean_mean(reward, indexes, only=False)
         critic_target = rewards_means[indexes]
 
-        mode = "grouped_by_audio"
+        mode = 1 #"grouped_by_audio"
 
     return adv.detach(), critic_target.detach(), mode
 
@@ -187,7 +187,8 @@ def decode_batch(
     enc_len: torch.Tensor,
     asr_model: EncDecCTCModel | EncDecCTCModelBPE,
     return_hypotheses: bool = False,
-    use_lm :  bool = True
+    use_lm :  bool = True ,
+    beam_size : int = 4
 ) -> List[str]:
     
     """
@@ -200,7 +201,7 @@ def decode_batch(
         
         decoding_cfg = asr_model.cfg.decoding
         decoding_cfg.strategy = "pyctcdecode"
-        decoding_cfg.beam.beam_size = 4           
+        decoding_cfg.beam.beam_size = beam_size           
         decoding_cfg.beam.return_best_hypothesis = False
         decoding_cfg.ngram_lm_model = kenlm_path  
         decoding_cfg.ngram_lm_alpha = 0.5        
@@ -317,7 +318,9 @@ def collect_batch(
     critic: CriticModel,
     batch: Dict[str, torch.Tensor],
     device: torch.device,
-    processor : RewardModelProcessor
+    processor : RewardModelProcessor, 
+    use_lm : bool = True,
+    beam_size : int = 4
 ) -> Dict[str, torch.Tensor | List[str]]:
     """
     One on-policy rollout over a single mini-batch for PPO.
@@ -369,7 +372,7 @@ def collect_batch(
         log_probs3d = _ensure_log_softmax(logits_or_logp3d)
 
         # Decode to text (for reward model & diagnostics)
-        transcriptions = decode_batch(log_probs3d, enc_len, asr_model)
+        transcriptions = decode_batch(log_probs3d, enc_len, asr_model, use_lm=use_lm, beam_size=beam_size)
 
         
         for i, tra in enumerate(transcriptions) :

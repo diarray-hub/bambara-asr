@@ -35,8 +35,8 @@ class PPOOptimizer:
         self.opt_critic = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
         self.ppo_loss = PPOLoss(clip_eps)
 
-        self.actor.train()
-        self.critic.train()
+        #self.actor.train()
+        #self.critic.train()
         #self._blank_idx = _blank_index(self.actor)
         actor_for_blank = self.actor.module if hasattr(self.actor, "module") else self.actor
         self._blank_idx = _blank_index(actor_for_blank)
@@ -129,6 +129,7 @@ class PPOOptimizer:
                         "logp_new_mean": float("nan"),
                         "reward_mean": float(rewards_mean.cpu()),
                         "V_hat_mean": float(values_old_mean.cpu()),
+                        
                     }
 
                 # === Clamp/validate lengths and mask invalid rows ===
@@ -231,6 +232,7 @@ class PPOOptimizer:
             "actor_loss": float(loss_actor.detach().cpu().item()),
             "critic_loss": float(loss_critic.detach().cpu().item()),
             "mean_value": float(V_hat.detach().mean().cpu().item()),
+            "mode" : float(mode)
         }
         out_stats.update(diag)
         return out_stats

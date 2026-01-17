@@ -15,7 +15,7 @@ import datasets
 
 from ..dataloaders.reward_dataset import RewardDataCollator
 from ..Rewards.reward_processor import RewardModelProcessor
-from ..utils.rollout import collect_batch
+from ..utils.rollout import collect_batch, _mean_mean, _same_num_hypotheses
 from ..optimizer.optimizer import PPOOptimizer
 from ..PPO.critic_network import CriticModel
 from ..Rewards.reward_model import RewardModel
@@ -50,10 +50,13 @@ class RLNFTrainer:
         num_workers: int = 2,
         pin_memory: bool = True,
         amp: bool = False,
-
         save_dir: str = "checkpoints",
         save_best_by: str = "val/wer",
         save_best_mode: str = "min",
+        use_lm : bool = True,
+        beam_size : int = 4,
+        resume_from_checkpoint: str | None = None,
+        
     ):
         # ================= DDP =================
         self.is_distributed = dist.is_available() and dist.is_initialized()
@@ -68,6 +71,13 @@ class RLNFTrainer:
         self.val_every = val_every
         self.current_epoch = None
         self.batch_size = batch_size
+        
+        self.use_lm = use_lm
+        self.beam_size = beam_size
+        
+        self.resume_from_checkpoint = resume_from_checkpoint
+        self.global_step = 0
+
 
         # ================= SAVE =================
         self.save_dir = save_dir
@@ -75,6 +85,9 @@ class RLNFTrainer:
         self.save_best_by = save_best_by
         self.save_best_mode = save_best_mode
         self.best_val = float("inf") if save_best_mode == "min" else -float("inf")
+        
+        self.best_actor_loss = float("inf")
+
 
         # ================= LOGGING =================
         self.tb_writer = SummaryWriter(f"tb_logs/{run_name}") if self.is_main else None
@@ -128,7 +141,12 @@ class RLNFTrainer:
     # TRAIN
     # =====================================================
     def train(self):
-        global_step = 0
+        
+        if self.resume_from_checkpoint is not None:
+            
+            self.load_checkpoint(self.resume_from_checkpoint)
+            
+        global_step = self.global_step
 
         try:
             for epoch in range(self.epochs):
@@ -154,6 +172,8 @@ class RLNFTrainer:
                         critic=critic,
                         processor=self.processor,
                         device=self.device,
+                        use_lm=self.use_lm,
+                        beam_size=self.beam_size
                     )
 
                     # ===== reward sync =====
@@ -167,11 +187,28 @@ class RLNFTrainer:
                     stats = self.ppo.update(batch_dict)
 
                     if self.is_main:
+                        
+                        actor_loss = stats["actor_loss"]
+                        
+                        if actor_loss < self.best_actor_loss :
+                            self.best_actor_loss = actor_loss
+                            self.save_actor_by_loss(global_step, actor_loss)
+                        
                         if self._use_wandb and wandb.run is not None:
                             wandb.log({f"train/{k}": v for k, v in stats.items()}, step=global_step)
 
                         for k, v in stats.items():
                             self.tb_writer.add_scalar(f"train/{k}", v, global_step)
+                            
+                            
+                        pbar.set_postfix_str("actor_loss :" f"{stats['actor_loss']:.3f}",
+                            "critic_loss :" f"{stats['critic_loss']:.3f}",
+                            "V:" f"{stats['mean_value']:.3f}",
+                            "adv :" f"{stats['adv_mean']:.3f}",
+                            "clip%:" f"{100*stats['frac_clipped']:.1f}",
+                            "reward:"f"{stats['reward_mean']:.3f}",
+                            "ratio_mean:"f"{stats['ratio_mean']:.3f}",
+                            "frac_clipped:"f"{stats['frac_clipped']:.3f}")
 
                         pbar.set_postfix({
                             "actor_loss": f"{stats['actor_loss']:.3f}",
@@ -192,6 +229,7 @@ class RLNFTrainer:
 
                     if self.val_every > 0 and global_step % self.val_every == 0:
                         self.validate(global_step)
+                        self.save_checkpoint(global_step)
                         
                     if self.is_distributed:
                         dist.barrier()
@@ -200,6 +238,7 @@ class RLNFTrainer:
                     dist.barrier()
 
                 self.validate(global_step, end_of_epoch=True)
+                self.save_checkpoint(global_step)
 
                 if self.is_distributed:
                     dist.barrier()
@@ -230,8 +269,6 @@ class RLNFTrainer:
                 disable=not self.is_main,
                 desc=f"Validation at step {step}"
             )
-
-            
             
             for batch in pbar_val:
                
@@ -261,21 +298,38 @@ class RLNFTrainer:
                     critic=critic,
                     processor=self.processor,
                     device=self.device,
+                    use_lm=self.use_lm,
+                    beam_size=self.beam_size
                 )
 
-                batch_reward = val_dict["reward"].mean()
+                batch_reward = ( val_dict["reward"].mean() 
+                                if _same_num_hypotheses(indexes=val_dict["indexes"]) 
+                                else _mean_mean(val_dict["reward"], indexes=val_dict["indexes"])[0]
+                            )
+                
                 batch_value = val_dict["values"].mean()
+                
                 rewards.append(batch_reward)
                 values.append(batch_value)
 
             # affichage live par batch
             if self.is_main:
+                
+                string = f"""WER :{sum(wers)/len(wers):.4f}, 
+                        CER: {sum(cers)/len(cers):.4f},
+                        Reward: {sum(rewards)/len(rewards):.3f},
+                        Value: {sum(values)/len(values):.3f}"""
+                        
+                pbar_val.set_postfix_str(string)
+                
                 pbar_val.set_postfix({
                     "WER": f"{sum(wers)/len(wers):.4f}",
                     "CER": f"{sum(cers)/len(cers):.4f}",
                     "Reward": f"{sum(rewards)/len(rewards):.3f}",
                     "Value": f"{sum(values)/len(values):.3f}",
                 })
+                
+                
 
             # ===== reduce metrics across GPUs =====
             t = torch.tensor([
@@ -323,7 +377,7 @@ class RLNFTrainer:
     # =====================================================
     def save_best(self, step: int):
         
-        # Récupérer les vrais modules (si wrapped en DDP)
+        
         actor = self.ppo.actor.module if hasattr(self.ppo.actor, "module") else self.ppo.actor
         critic = self.ppo.critic.module if hasattr(self.ppo.critic, "module") else self.ppo.critic
 
@@ -332,7 +386,7 @@ class RLNFTrainer:
         fallback_actor = os.path.join(self.save_dir, f"best_step{step}_actor_state.pt")
         fallback_critic = os.path.join(self.save_dir, f"best_step{step}_critic_state.pt")
 
-        # Sauvegarde actor
+       
         try:
             actor.save_to(actor_path)
             print(f"[save_best] actor saved -> {actor_path}")
@@ -344,7 +398,7 @@ class RLNFTrainer:
             except Exception as e2:
                 print(f"[save_best] ERROR: Could not save actor state_dict: {e2}")
 
-        # Sauvegarde critic
+      
         try:
             critic.save_pretrained(critic_dir)
             print(f"[save_best] critic saved -> {critic_dir}")
@@ -362,3 +416,60 @@ class RLNFTrainer:
 
         actor.save_to("actor_final.nemo")
         critic.save_pretrained("critic_final")
+        
+    def save_checkpoint(self, step: int):
+        if not self.is_main:
+            return
+
+        actor = self.ppo.actor.module if self.is_distributed else self.ppo.actor
+        critic = self.ppo.critic.module if self.is_distributed else self.ppo.critic
+
+        ckpt = {
+            "actor": actor.state_dict(),
+            "critic": critic.state_dict(),
+            "actor_optim": self.ppo.actor_optim.state_dict(),
+            "critic_optim": self.ppo.critic_optim.state_dict(),
+            "epoch": self.current_epoch,
+            "global_step": step,
+            "best_val": self.best_val,
+        }
+
+        path = os.path.join(self.save_dir, f"checkpoint_step{step}.pt")
+        torch.save(ckpt, path)
+
+    def load_checkpoint(self, path: str):
+        
+        map_location = {"cuda:%d" % 0: "cuda:%d" % self.rank} if self.is_distributed else None
+        ckpt = torch.load(path, map_location=map_location)
+
+        actor = self.ppo.actor.module if self.is_distributed else self.ppo.actor
+        critic = self.ppo.critic.module if self.is_distributed else self.ppo.critic
+
+        actor.load_state_dict(ckpt["actor"])
+        critic.load_state_dict(ckpt["critic"])
+
+        self.ppo.actor_optim.load_state_dict(ckpt["actor_optim"])
+        self.ppo.critic_optim.load_state_dict(ckpt["critic_optim"])
+
+        self.current_epoch = ckpt.get("epoch", 0)
+        self.global_step = ckpt.get("global_step", 0)
+        self.best_val = ckpt.get("best_val", self.best_val)
+
+        if self.is_main:
+            print(f"[resume] Loaded checkpoint from {path}")
+            
+    def save_actor_by_loss(self, step: int, actor_loss: float):
+        
+        actor = self.ppo.actor.module if self.is_distributed else self.ppo.actor
+
+        path = os.path.join(
+            self.save_dir,
+            f"best_actor_by_loss_step{step}_loss{actor_loss:.4f}.nemo"
+        )
+
+        try:
+            actor.save_to(path)
+            print(f"[save_actor_by_loss] actor saved -> {path}")
+        except Exception as e:
+            torch.save(actor.state_dict(), path.replace(".nemo", ".pt"))
+
