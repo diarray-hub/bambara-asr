@@ -69,7 +69,7 @@ class RLNFTrainer:
         self.reward_model = reward_model
         self.epochs = epochs
         self.val_every = val_every
-        self.current_epoch = None
+        self.current_epoch = 0
         self.batch_size = batch_size
         
         self.use_lm = use_lm
@@ -149,7 +149,8 @@ class RLNFTrainer:
         global_step = self.global_step
 
         try:
-            for epoch in range(self.epochs):
+            for epoch in range(self.current_epoch, self.epochs):
+                
                 self.current_epoch = epoch
 
                 if self.is_distributed:
@@ -417,7 +418,7 @@ class RLNFTrainer:
         actor.save_to("actor_final.nemo")
         critic.save_pretrained("critic_final")
         
-    def save_checkpoint(self, step: int):
+    def save_checkpoint(self, step: int, name = "last"):
         if not self.is_main:
             return
 
@@ -427,11 +428,12 @@ class RLNFTrainer:
         ckpt = {
             "actor": actor.state_dict(),
             "critic": critic.state_dict(),
-            "actor_optim": self.ppo.actor_optim.state_dict(),
-            "critic_optim": self.ppo.critic_optim.state_dict(),
+            "actor_optim": self.ppo.opt_actor.state_dict(),
+            "critic_optim": self.ppo.opt_critic.state_dict(),
             "epoch": self.current_epoch,
             "global_step": step,
             "best_val": self.best_val,
+            "best_actor_loss": self.best_actor_loss, 
         }
 
         path = os.path.join(self.save_dir, f"checkpoint_step{step}.pt")
@@ -439,7 +441,7 @@ class RLNFTrainer:
 
     def load_checkpoint(self, path: str):
         
-        map_location = {"cuda:%d" % 0: "cuda:%d" % self.rank} if self.is_distributed else None
+        map_location = {"cuda:%d" % 0: "cuda:%d" % self.rank} if self.is_distributed else self.device
         ckpt = torch.load(path, map_location=map_location)
 
         actor = self.ppo.actor.module if self.is_distributed else self.ppo.actor
@@ -448,15 +450,21 @@ class RLNFTrainer:
         actor.load_state_dict(ckpt["actor"])
         critic.load_state_dict(ckpt["critic"])
 
-        self.ppo.actor_optim.load_state_dict(ckpt["actor_optim"])
-        self.ppo.critic_optim.load_state_dict(ckpt["critic_optim"])
+        self.ppo.opt_actor.load_state_dict(ckpt["actor_optim"])
+        self.ppo.opt_critic.load_state_dict(ckpt["critic_optim"])
 
         self.current_epoch = ckpt.get("epoch", 0)
         self.global_step = ckpt.get("global_step", 0)
         self.best_val = ckpt.get("best_val", self.best_val)
+        self.best_actor_loss = ckpt.get("best_actor_loss", self.best_actor_loss)
+
 
         if self.is_main:
-            print(f"[resume] Loaded checkpoint from {path}")
+            
+            print(
+                f"[checkpoint] resumed from {path} | "
+                f"epoch={self.current_epoch}, step={self.global_step}"
+            )
             
     def save_actor_by_loss(self, step: int, actor_loss: float):
         
