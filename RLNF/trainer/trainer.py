@@ -300,15 +300,17 @@ class RLNFTrainer:
                 #hyp_texts = [[h.text for h in hyp] for hyp in hyps] #[h.text for h in hyps]
                 hyp_texts_flat = [h for hyps_per_audio in hyps for h in hyps_per_audio]
 
+                refs = self.processor.tokenizer.batch_decode(
+                    batch["text"], skip_special_tokens=True
+                )
+                 
                 # Dupliquer refs pour correspondre aux hypothèses
                 refs_flat = []
                 for i, hyps_per_audio in enumerate(hyps):
                     n_hyps = len(hyps_per_audio)
                     refs_flat.extend([refs[i]] * n_hyps)
 
-                refs = self.processor.tokenizer.batch_decode(
-                    batch["text"], skip_special_tokens=True
-                )
+               
                 
                 print(refs_flat)
                 print(hyp_texts_flat)
