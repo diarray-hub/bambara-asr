@@ -241,7 +241,7 @@ class RLNFTrainer:
 
                     # ---- validation pour tous les ranks (rank 0 log) ----
                     if do_val:
-                        self.validate(global_step)
+                        self.validate(global_step, transcriptions = batch_dict["texts"])
                         self.save_checkpoint(global_step)
                         
 
@@ -255,7 +255,7 @@ class RLNFTrainer:
                 #if self.is_distributed:
                 #    dist.barrier()
 
-                self.validate(global_step, end_of_epoch=True)
+                self.validate(global_step, end_of_epoch=True, transcriptions = batch_dict["texts"])
 
                 #if self.is_distributed:
                 #    dist.barrier()
@@ -270,7 +270,7 @@ class RLNFTrainer:
     # =====================================================
     # VALIDATION
     # =====================================================
-    def validate(self, step: int, end_of_epoch: bool = False):
+    def validate(self, step: int, transcriptions : list[list[str]], end_of_epoch: bool = False):
         actor = self.ppo.actor.module if self.is_distributed else self.ppo.actor
         critic = self.ppo.critic.module if self.is_distributed else self.ppo.critic
 
@@ -296,43 +296,15 @@ class RLNFTrainer:
                 
                 audio = [aud for aud in batch["_audio"]]
                 hyps = actor.transcribe(audio, batch_size=8)
-                """    
-                #hyp_texts = [[h.text for h in hyp] for hyp in hyps] #[h.text for h in hyps]
-                hyp_texts_flat = [h.text for hyps_per_audio in hyps for h in hyps_per_audio]
-
-                refs = self.processor.tokenizer.batch_decode(
-                    batch["text"], skip_special_tokens=True
-                )
-                 
-                # Dupliquer refs pour correspondre aux hypothèses
-                refs_flat = []
-                for i, hyps_per_audio in enumerate(hyps):
-                    n_hyps = len(hyps_per_audio)
-                    refs_flat.extend([refs[i]] * n_hyps) 
-                """
                 
-                hyp_texts_flat = []
-                refs_flat = []
-                indexes_flat = []
-
-                refs = self.processor.tokenizer.batch_decode(
-                    batch["text"], skip_special_tokens=True
-                )
-
-                for audio_idx, hyps_per_audio in enumerate(hyps):
-                    for h in hyps_per_audio:
-                        hyp_texts_flat.append(h.text if hasattr(h, "text") else str(h))
-                        refs_flat.append(refs[audio_idx])
-                        indexes_flat.append(audio_idx)
-
-               
+                hyp_texts = [[h.text for h in hyp] for hyp in hyps] #[h.text for h in hyps]
                 
-                print(refs_flat)
-                print(hyp_texts_flat)
+                print(hyp_texts)
+                print(transcriptions)
 
                 # metrics per batch
-                batch_wer = word_error_rate(hyp_texts_flat, refs_flat)
-                batch_cer = word_error_rate(hyp_texts_flat, refs_flat, use_cer=True)
+                batch_wer = 0.0 #word_error_rate(hyp_texts_flat, refs_flat)
+                batch_cer = 0.0 #word_error_rate(hyp_texts_flat, refs_flat, use_cer=True)
                 wers.append(batch_wer)
                 cers.append(batch_cer)
 

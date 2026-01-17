@@ -389,6 +389,7 @@ def collect_batch(
 
             audio_i = audios[i]              # [T, F]
             audio = audio_i.unsqueeze(0).repeat(K_i, 1, 1)   # [K_i, T, F]
+            
 
             audio_len = audio_lens[i].expand(K_i)
 
