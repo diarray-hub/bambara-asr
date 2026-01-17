@@ -156,8 +156,12 @@ class RLNFTrainer:
                 )
 
                 for batch in pbar:
+                    
                     actor = self.ppo.actor.module if self.is_distributed else self.ppo.actor
                     critic = self.ppo.critic.module if self.is_distributed else self.ppo.critic
+                    
+                    actor.train()
+                    critic.train()
 
                     batch_dict = collect_batch(
                         batch=batch,
@@ -271,6 +275,7 @@ class RLNFTrainer:
         wers, cers, rewards, values = [], [], [], []
 
         with torch.no_grad():
+            
             pbar_val = tqdm(
                 self.val_loader,
                 leave=False,
