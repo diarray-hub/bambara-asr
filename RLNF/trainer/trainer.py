@@ -202,14 +202,14 @@ class RLNFTrainer:
                             self.tb_writer.add_scalar(f"train/{k}", v, global_step)
                             
                             
-                        pbar.set_postfix_str("actor_loss :" f"{stats['actor_loss']:.3f}",
-                            "critic_loss :" f"{stats['critic_loss']:.3f}",
-                            "V:" f"{stats['mean_value']:.3f}",
-                            "adv :" f"{stats['adv_mean']:.3f}",
-                            "clip%:" f"{100*stats['frac_clipped']:.1f}",
-                            "reward:"f"{stats['reward_mean']:.3f}",
-                            "ratio_mean:"f"{stats['ratio_mean']:.3f}",
-                            "frac_clipped:"f"{stats['frac_clipped']:.3f}")
+                        pbar.set_postfix_str(f"""actor_loss :{stats['actor_loss']:.3f}
+                            critic_loss : {stats['critic_loss']:.3f},
+                            V: {stats['mean_value']:.3f},
+                            adv : {stats['adv_mean']:.3f},
+                            clip%: {100*stats['frac_clipped']:.1f},
+                            reward:{stats['reward_mean']:.3f},
+                            ratio_mean:{stats['ratio_mean']:.3f},
+                            frac_clipped:{stats['frac_clipped']:.3f}""")
 
                         pbar.set_postfix({
                             "actor_loss": f"{stats['actor_loss']:.3f}",
