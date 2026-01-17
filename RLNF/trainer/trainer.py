@@ -194,6 +194,8 @@ class RLNFTrainer:
                         if actor_loss < self.best_actor_loss :
                             self.best_actor_loss = actor_loss
                             self.save_actor_by_loss(global_step, actor_loss)
+                            
+                            
                         
                         if self._use_wandb and wandb.run is not None:
                             wandb.log({f"train/{k}": v for k, v in stats.items()}, step=global_step)
@@ -226,23 +228,37 @@ class RLNFTrainer:
                     global_step += 1
                     
                     if self.is_distributed:
-                        dist.barrier()
+                        #dist.barrier()
+                        step_tensor = torch.tensor(global_step, device=self.device)
+                        dist.broadcast(step_tensor, src=0)
+                        global_step = step_tensor.item()
+                        
+                    do_val = self.val_every > 0 and global_step % self.val_every == 0
+                    if self.is_distributed:
+                        val_tensor = torch.tensor(int(do_val), device=self.device)
+                        dist.broadcast(val_tensor, src=0)
+                        do_val = bool(val_tensor.item())
 
-                    if self.val_every > 0 and global_step % self.val_every == 0:
+                    # ---- validation pour tous les ranks (rank 0 log) ----
+                    if do_val:
                         self.validate(global_step)
                         self.save_checkpoint(global_step)
                         
-                    if self.is_distributed:
-                        dist.barrier()
 
-                if self.is_distributed:
-                    dist.barrier()
+                    #if self.val_every > 0 and global_step % self.val_every == 0:
+                    #    self.validate(global_step)
+                    #    self.save_checkpoint(global_step)
+                        
+                    #if self.is_distributed:
+                    #    dist.barrier()
+
+                #if self.is_distributed:
+                #    dist.barrier()
 
                 self.validate(global_step, end_of_epoch=True)
-                self.save_checkpoint(global_step)
 
-                if self.is_distributed:
-                    dist.barrier()
+                #if self.is_distributed:
+                #    dist.barrier()
 
         finally:
             if self.is_main:
