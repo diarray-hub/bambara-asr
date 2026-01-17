@@ -296,7 +296,11 @@ class RLNFTrainer:
                 
                 audio = [aud for aud in batch["_audio"]]
                 hyps = actor.transcribe(audio, batch_size=8)
-                hyp_texts = [h.text for h in hyps]
+                
+                print(hyps)
+                
+                hyp_texts = [[h.text for h in hyp] for hyp in hyps] #[h.text for h in hyps]
+                
 
                 refs = self.processor.tokenizer.batch_decode(
                     batch["text"], skip_special_tokens=True
