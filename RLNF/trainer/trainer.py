@@ -58,6 +58,7 @@ class RLNFTrainer:
         resume_from_checkpoint: str | None = None,
         
     ):
+        # ================= DDP =================
         self.is_distributed = dist.is_available() and dist.is_initialized()
         self.rank = dist.get_rank() if self.is_distributed else 0
         self.world_size = dist.get_world_size() if self.is_distributed else 1
@@ -78,6 +79,7 @@ class RLNFTrainer:
         self.global_step = 0
 
 
+        # ================= SAVE =================
         self.save_dir = save_dir
         os.makedirs(self.save_dir, exist_ok=True)
         self.save_best_by = save_best_by
@@ -87,6 +89,7 @@ class RLNFTrainer:
         self.best_actor_loss = float("inf")
 
 
+        # ================= LOGGING =================
         self.tb_writer = SummaryWriter(f"tb_logs/{run_name}") if self.is_main else None
         self._use_wandb = wandb_logging and self.is_main
 
@@ -96,6 +99,7 @@ class RLNFTrainer:
                 name=run_name,
             )
 
+        # ================= DATA =================
         collate_fn = RewardDataCollator(processor=processor, augment=False)
 
         train_sampler = DistributedSampler(dataset["train"]) if self.is_distributed else None
@@ -121,6 +125,7 @@ class RLNFTrainer:
             pin_memory=pin_memory,
         )
 
+        # ================= PPO =================
         self.ppo = PPOOptimizer(
             actor=asr_model,
             critic=critic_model,
@@ -132,7 +137,9 @@ class RLNFTrainer:
             amp=amp,
         )
 
-    
+    # =====================================================
+    # TRAIN
+    # =====================================================
     def train(self):
         
         if self.resume_from_checkpoint is not None:
@@ -156,12 +163,8 @@ class RLNFTrainer:
                 )
 
                 for batch in pbar:
-                    
                     actor = self.ppo.actor.module if self.is_distributed else self.ppo.actor
                     critic = self.ppo.critic.module if self.is_distributed else self.ppo.critic
-                    
-                    #actor.train()
-                    #critic.train()
 
                     batch_dict = collect_batch(
                         batch=batch,
@@ -240,10 +243,7 @@ class RLNFTrainer:
                     if do_val:
                         self.validate(global_step)
                         self.save_checkpoint(global_step)
-                            
-                        #if self.is_distributed:
-                        #    dist.barrier()
-                                            
+                        
 
                     #if self.val_every > 0 and global_step % self.val_every == 0:
                     #    self.validate(global_step)
@@ -255,12 +255,7 @@ class RLNFTrainer:
                 #if self.is_distributed:
                 #    dist.barrier()
 
-                #self.validate(global_step, indexes=batch_dict["indexes"], end_of_epoch=True)
-                #if self.is_main:
                 self.validate(global_step, end_of_epoch=True)
-                #if self.is_distributed:
-                #    dist.barrier()
-
 
                 #if self.is_distributed:
                 #    dist.barrier()
@@ -272,7 +267,9 @@ class RLNFTrainer:
                     wandb.finish()
                 self.tb_writer.close()
 
-
+    # =====================================================
+    # VALIDATION
+    # =====================================================
     def validate(self, step: int , end_of_epoch: bool = False):
         actor = self.ppo.actor.module if self.is_distributed else self.ppo.actor
         critic = self.ppo.critic.module if self.is_distributed else self.ppo.critic
@@ -283,7 +280,6 @@ class RLNFTrainer:
         wers, cers, rewards, values = [], [], [], []
 
         with torch.no_grad():
-            
             pbar_val = tqdm(
                 self.val_loader,
                 leave=False,
@@ -315,30 +311,32 @@ class RLNFTrainer:
                 )
                 
                 indexes = val_dict["indexes"]
+                
                 expanded = batch["text"][indexes]
                 
                 result = [
                     expanded[indexes == i]
                     for i in torch.unique(indexes)
                 ]
+              
 
-                refs =  [
+                refs = [
                     self.processor.tokenizer.batch_decode(group, skip_special_tokens=True)
                     for group in result
-                ]
+                    ]
                 
                 print(hyp_texts)
                 print(refs)
 
+                # metrics per batch
+              
+                wers.append(0.0)
+                cers.append(0.0)
 
-                wers.append(self._wer_cer(refs=refs, hyps=hyp_texts, indexes=indexes)[0])
-                cers.append(self._wer_cer(refs=refs, hyps=hyp_texts, indexes=indexes)[1])
-
-               
-
+        
                 batch_reward = (val_dict["reward"].mean() 
-                                if _same_num_hypotheses(indexes=indexes) 
-                                else _mean_mean(val_dict["reward"], indexes=indexes)[0]
+                                if _same_num_hypotheses(indexes=val_dict["indexes"]) 
+                                else _mean_mean(val_dict["reward"], indexes=val_dict["indexes"])[0]
                             )
                 
                 batch_value = val_dict["values"].mean()
@@ -406,7 +404,9 @@ class RLNFTrainer:
         critic.train()
 
 
-  
+    # =====================================================
+    # SAVE
+    # =====================================================
     def save_best(self, step: int):
         
         
@@ -533,7 +533,3 @@ class RLNFTrainer:
         cms = (tcs.mean() if _same_num_hypotheses(indexes=indexes) else _mean_mean(tcs, indexes)[0])
         
         return wms, cms
-        
-        
-        
-        
