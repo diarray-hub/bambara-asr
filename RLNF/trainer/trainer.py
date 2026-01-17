@@ -58,7 +58,6 @@ class RLNFTrainer:
         resume_from_checkpoint: str | None = None,
         
     ):
-        # ================= DDP =================
         self.is_distributed = dist.is_available() and dist.is_initialized()
         self.rank = dist.get_rank() if self.is_distributed else 0
         self.world_size = dist.get_world_size() if self.is_distributed else 1
@@ -79,7 +78,6 @@ class RLNFTrainer:
         self.global_step = 0
 
 
-        # ================= SAVE =================
         self.save_dir = save_dir
         os.makedirs(self.save_dir, exist_ok=True)
         self.save_best_by = save_best_by
@@ -89,7 +87,6 @@ class RLNFTrainer:
         self.best_actor_loss = float("inf")
 
 
-        # ================= LOGGING =================
         self.tb_writer = SummaryWriter(f"tb_logs/{run_name}") if self.is_main else None
         self._use_wandb = wandb_logging and self.is_main
 
@@ -99,7 +96,6 @@ class RLNFTrainer:
                 name=run_name,
             )
 
-        # ================= DATA =================
         collate_fn = RewardDataCollator(processor=processor, augment=False)
 
         train_sampler = DistributedSampler(dataset["train"]) if self.is_distributed else None
@@ -125,7 +121,6 @@ class RLNFTrainer:
             pin_memory=pin_memory,
         )
 
-        # ================= PPO =================
         self.ppo = PPOOptimizer(
             actor=asr_model,
             critic=critic_model,
@@ -137,9 +132,7 @@ class RLNFTrainer:
             amp=amp,
         )
 
-    # =====================================================
-    # TRAIN
-    # =====================================================
+    
     def train(self):
         
         if self.resume_from_checkpoint is not None:
@@ -241,7 +234,7 @@ class RLNFTrainer:
 
                     # ---- validation pour tous les ranks (rank 0 log) ----
                     if do_val:
-                        self.validate(global_step, transcriptions = batch_dict["texts"])
+                        self.validate(global_step, indexes=batch_dict["indexes"])
                         self.save_checkpoint(global_step)
                         
 
@@ -255,7 +248,7 @@ class RLNFTrainer:
                 #if self.is_distributed:
                 #    dist.barrier()
 
-                self.validate(global_step, end_of_epoch=True, transcriptions = batch_dict["texts"])
+                self.validate(global_step, indexes=batch_dict["indexes"], end_of_epoch=True)
 
                 #if self.is_distributed:
                 #    dist.barrier()
@@ -267,10 +260,8 @@ class RLNFTrainer:
                     wandb.finish()
                 self.tb_writer.close()
 
-    # =====================================================
-    # VALIDATION
-    # =====================================================
-    def validate(self, step: int, transcriptions : list[list[str]], end_of_epoch: bool = False):
+
+    def validate(self, step: int, indexes , end_of_epoch: bool = False):
         actor = self.ppo.actor.module if self.is_distributed else self.ppo.actor
         critic = self.ppo.critic.module if self.is_distributed else self.ppo.critic
 
@@ -299,14 +290,21 @@ class RLNFTrainer:
                 
                 hyp_texts = [[h.text for h in hyp] for hyp in hyps] #[h.text for h in hyps]
                 
-                print(hyp_texts)
-                print(transcriptions)
+                expanded = batch["text"][indexes]
+                
+                result = [
+                    expanded[indexes == i]
+                    for i in torch.unique(indexes)
+                ]
 
-                # metrics per batch
-                batch_wer = 0.0 #word_error_rate(hyp_texts_flat, refs_flat)
-                batch_cer = 0.0 #word_error_rate(hyp_texts_flat, refs_flat, use_cer=True)
-                wers.append(batch_wer)
-                cers.append(batch_cer)
+                refs =  [
+                    self.processor.tokenizer.batch_decode(group, skip_special_tokens=True)
+                    for group in result
+                ]
+
+
+                wers.append(self._wer_cer(refs=refs, hyps=hyp_texts, indexes=indexes)[0])
+                cers.append(self._wer_cer(refs=refs, hyps=hyp_texts, indexes=indexes)[1])
 
                 val_dict = collect_batch(
                     batch=batch,
@@ -319,7 +317,7 @@ class RLNFTrainer:
                     beam_size=self.beam_size
                 )
 
-                batch_reward = ( val_dict["reward"].mean() 
+                batch_reward = (val_dict["reward"].mean() 
                                 if _same_num_hypotheses(indexes=val_dict["indexes"]) 
                                 else _mean_mean(val_dict["reward"], indexes=val_dict["indexes"])[0]
                             )
@@ -389,9 +387,7 @@ class RLNFTrainer:
         critic.train()
 
 
-    # =====================================================
-    # SAVE
-    # =====================================================
+  
     def save_best(self, step: int):
         
         
@@ -497,3 +493,28 @@ class RLNFTrainer:
         except Exception as e:
             torch.save(actor.state_dict(), path.replace(".nemo", ".pt"))
 
+    def _wer_cer(self, hyps, refs, indexes) :
+        
+        wers = [
+            word_error_rate([refs[group_id][j]], [hyps[group_id][j]])
+            for group_id in range(len(refs))
+            for j in range(len(refs[group_id]))
+        ]
+        
+        cers = [
+            word_error_rate([refs[group_id][j]], [hyps[group_id][j]], use_cer= True)
+            for group_id in range(len(refs))
+            for j in range(len(refs[group_id]))
+        ]
+        
+        tws = torch.tensor(wers)
+        tcs = torch.tensor(cers)
+        
+        wms = (tws.mean() if _same_num_hypotheses(indexes=indexes) else _mean_mean(tws, indexes)[0])
+        cms = (tcs.mean() if _same_num_hypotheses(indexes=indexes) else _mean_mean(tcs, indexes)[0])
+        
+        return wms, cms
+        
+        
+        
+        
