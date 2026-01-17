@@ -301,6 +301,9 @@ class RLNFTrainer:
                     self.processor.tokenizer.batch_decode(group, skip_special_tokens=True)
                     for group in result
                 ]
+                
+                print(hyp_texts)
+                print(refs)
 
 
                 wers.append(self._wer_cer(refs=refs, hyps=hyp_texts, indexes=indexes)[0])
