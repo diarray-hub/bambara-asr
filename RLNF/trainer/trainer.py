@@ -160,8 +160,8 @@ class RLNFTrainer:
                     actor = self.ppo.actor.module if self.is_distributed else self.ppo.actor
                     critic = self.ppo.critic.module if self.is_distributed else self.ppo.critic
                     
-                    actor.train()
-                    critic.train()
+                    #actor.train()
+                    #critic.train()
 
                     batch_dict = collect_batch(
                         batch=batch,
@@ -238,9 +238,13 @@ class RLNFTrainer:
 
                     # ---- validation pour tous les ranks (rank 0 log) ----
                     if do_val:
-                        self.validate(global_step, indexes=batch_dict["indexes"])
-                        self.save_checkpoint(global_step)
-                        
+                        if self.is_main:
+                            self.validate(global_step, indexes=batch_dict["indexes"])
+                            self.save_checkpoint(global_step)
+                            
+                        if self.is_distributed:
+                            dist.barrier()
+                                            
 
                     #if self.val_every > 0 and global_step % self.val_every == 0:
                     #    self.validate(global_step)
@@ -252,7 +256,12 @@ class RLNFTrainer:
                 #if self.is_distributed:
                 #    dist.barrier()
 
-                self.validate(global_step, indexes=batch_dict["indexes"], end_of_epoch=True)
+                #self.validate(global_step, indexes=batch_dict["indexes"], end_of_epoch=True)
+                if self.is_main:
+                    self.validate(global_step, indexes=batch_dict["indexes"], end_of_epoch=True)
+                if self.is_distributed:
+                    dist.barrier()
+
 
                 #if self.is_distributed:
                 #    dist.barrier()
@@ -363,8 +372,8 @@ class RLNFTrainer:
                 len(wers)
             ], device=self.device)
 
-            if self.is_distributed:
-                dist.all_reduce(t, op=dist.ReduceOp.SUM)
+            #if self.is_distributed:
+            #    dist.all_reduce(t, op=dist.ReduceOp.SUM)
 
             total = t[-1].item()
             to_log = {
