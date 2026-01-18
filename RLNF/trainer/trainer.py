@@ -330,8 +330,8 @@ class RLNFTrainer:
 
                 # metrics per batch
               
-                wers.append(0.0)
-                cers.append(0.0)
+                wers.append(self._wer_cer(hyps=hyp_texts, refs=refs, indexes=indexes)[0])
+                cers.append(self._wer_cer(hyps=hyp_texts, refs=refs, indexes=indexes)[1])
 
         
                 batch_reward = (val_dict["reward"].mean() 
