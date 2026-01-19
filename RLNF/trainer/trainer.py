@@ -294,10 +294,6 @@ class RLNFTrainer:
                 actor.sample_rate = 16000
                 actor.preprocessor.featurizer.to(self.device)
                 
-                audio = [aud for aud in batch["_audio"]]
-                hyps = actor.transcribe(audio, batch_size=8)
-                
-                hyp_texts = [[h.text for h in hyp] for hyp in hyps] #[h.text for h in hyps]
                 
                 val_dict = collect_batch(
                     batch=batch,
@@ -311,7 +307,6 @@ class RLNFTrainer:
                 )
                 
                 indexes = val_dict["indexes"]
-                
                 expanded = batch["text"][indexes]
                 
                 result = [
@@ -325,13 +320,25 @@ class RLNFTrainer:
                     for group in result
                     ]
                 
-                print(hyp_texts)
-                print(refs)
+                
+                
+                #print(hyp_texts)
+                #print(refs)
+                
+                #print(val_dict["texts"], )
+                
+                #wers = self._wer_cer(hyps=hyp_texts, refs=refs, indexes=indexes)[0]
+                #cers = self._wer_cer(hyps=hyp_texts, refs=refs, indexes=indexes)[1]
+                
+                #wers.append(self._wer_cer(hyps=val_dict["texts"], refs=refs, indexes=indexes)[0])
+                #cers.append(self._wer_cer(hyps=val_dict["texts"], refs=refs, indexes=indexes)[1])
+                
+                
 
                 # metrics per batch
               
-                wers.append(self._wer_cer(hyps=hyp_texts, refs=refs, indexes=indexes)[0])
-                cers.append(self._wer_cer(hyps=hyp_texts, refs=refs, indexes=indexes)[1])
+                wers.append(self._wer_cer(hyps=val_dict["texts"], refs=refs, indexes=indexes)[0])
+                cers.append(self._wer_cer(hyps=val_dict["texts"], refs=refs, indexes=indexes)[1])
 
         
                 batch_reward = (val_dict["reward"].mean() 
@@ -399,7 +406,7 @@ class RLNFTrainer:
                     wandb.log(to_log, step=step)
                 for k, v in to_log.items():
                     self.tb_writer.add_scalar(k, v, step)
-
+                    
         actor.train()
         critic.train()
 
