@@ -160,7 +160,7 @@ def ppo_group_statistics(
     if same_hypo:
         # Classic PPO
         adv = reward - values_old
-        adv = (adv - adv.mean()) / (adv.std(unbiased=False) + eps)
+        #adv = (adv - adv.mean()) / (adv.std(unbiased=False) + eps)
 
         critic_target = reward
         mode = 0 #"flat_hypotheses"
@@ -171,7 +171,7 @@ def ppo_group_statistics(
     else:
         # Advantage normalized per audio
         adv = reward - values_old
-        adv = _normalize_adv(adv, indexes, eps=eps)
+        #adv = _normalize_adv(adv, indexes, eps=eps)
 
         # Critic target = mean reward per audio
         rewards_means, _, _ = _mean_mean(reward, indexes, only=False)
