@@ -242,6 +242,16 @@ class RLNFTrainerSCST:
                 # Rewards mean
                 rewards.append(val_dict["reward"].mean())
 
+                if self._use_wandb:
+                    wandb.log({
+                        "val/wer": sum(wers)/len(wers),
+                        "val/cer": sum(cers)/len(cers),
+                        "val/reward": sum(rewards)/len(rewards),
+                        "step": step,
+                        "reward" : sum(rewards)/len(rewards)
+                    })
+
+
             # Aggregate metrics
             if self.is_main:
                 string = f"WER: {sum(wers)/len(wers):.4f}, CER: {sum(cers)/len(cers):.4f}, Reward: {sum(rewards)/len(rewards):.4f}"
