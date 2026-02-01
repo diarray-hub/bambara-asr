@@ -21,6 +21,8 @@ class PPOOptimizer:
         critic_lr: float = 1e-4,
         K_updates: int = 4,
         entropy_coef: float = 0.0,
+        kl_coef : float = 0.01,
+        target_kl : float = 0.01,
         device: torch.device = torch.device("cpu"),
         amp: bool = False,
     ):
@@ -34,6 +36,9 @@ class PPOOptimizer:
         self.opt_actor = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
         self.opt_critic = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
         self.ppo_loss = PPOLoss(clip_eps)
+
+        self.kl_coef = kl_coef
+        self.target_kl = target_kl
 
         #self.actor.train()
         #self.critic.train()
@@ -150,6 +155,17 @@ class PPOOptimizer:
                 else:
                     logp_new = logp_old.clone()
 
+                
+                kl = (logp_old - logp_new)
+                
+                if _same_num_hypotheses(indexes=indexes) :
+
+                    kl_mean = kl.mean()
+
+                else :
+                    _, kl_mean, _ = _mean_mean(kl, indexes, only=False)
+
+
                 # Critic forward
                 V_hat = self.critic(audio = audio)  # [B]
 
@@ -157,6 +173,8 @@ class PPOOptimizer:
                 # Zero-out advantages for invalid rows to fully mask them
                 adv_use = adv * valid.to(adv.dtype)
                 loss_actor = self.ppo_loss(logp_old, logp_new, adv_use, indexes)
+
+                loss_actor = loss_actor + self.kl_coef * kl_mean
 
                 # Optional entropy bonus
                 if self.entropy_coef > 0:
@@ -207,7 +225,20 @@ class PPOOptimizer:
                         "logp_new_mean": float(logp_new_mean.cpu()),
                         "reward_mean": float(rewards_mean.cpu()),
                         "V_hat_mean": float(V_hat.mean().cpu()),
+                        "kl_mean": float(kl_mean.detach().cpu()),
+                        "kl_coef": float(self.kl_coef),
+
                     }
+
+                with torch.no_grad():
+
+                    if kl_mean > 2.0 * self.target_kl:
+                        self.kl_coef *= 1.5
+                    elif kl_mean < 0.5 * self.target_kl:
+                        self.kl_coef *= 0.5
+
+                    self.kl_coef = float(max(min(self.kl_coef, 10.0), 1e-5))
+
 
             # === Backprop + Grad clipping (AMP-aware) ===
             total_loss = loss_actor + 0.5 * loss_critic
