@@ -42,7 +42,7 @@ class SCSTOptimizer:
             reward = reward
 
         else : 
-            reward, _, _ = _mean_mean(reward, indexes)
+            reward, _, _ = _mean_mean(reward, indexes, False)
 
             reward = reward["indexes"]
 
@@ -102,7 +102,7 @@ class SCSTOptimizer:
 
             if not _same_num_hypotheses(indexes) :
 
-                seq_logp, _, _ = _mean_mean(seq_logp, indexes)
+                seq_logp, _, _ = _mean_mean(seq_logp, indexes, False)
                 seq_logp = seq_logp["indexes"]
 
             reward_p = self.alpha * reward + self.beta * wers.cos() - self.gamma * cers.sin()
