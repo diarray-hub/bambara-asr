@@ -44,7 +44,7 @@ class SCSTOptimizer:
         else : 
             reward, _, _ = _mean_mean(reward, indexes, False)
 
-            reward = reward["indexes"]
+            reward = reward[indexes]
 
         baseline = torch.zeros_like(reward)
 
@@ -100,9 +100,10 @@ class SCSTOptimizer:
             # Sequence log-prob per hypothesis (CTC)
             seq_logp = _seq_logprob_ctc(log_probs, input_lens, targets, target_lens, self.blank_idx)
 
-            #if not _same_num_hypotheses(indexes) :
-            #    seq_logp, _, _ = _mean_mean(seq_logp, indexes, False)
-            #    seq_logp = seq_logp["indexes"]
+            if not _same_num_hypotheses(indexes) :
+                
+                seq_logp, _, _ = _mean_mean(seq_logp, indexes, False)
+                seq_logp = seq_logp[indexes]
 
             reward_p = self.alpha * reward + self.beta * wers.cos() - self.gamma * cers.sin()
 
