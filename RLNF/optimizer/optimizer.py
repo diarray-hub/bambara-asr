@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from nemo.collections.asr.models import EncDecCTCModel, EncDecCTCModelBPE
 from typing import Dict
-from ..utils.rollout import _seq_logprob_ctc, _blank_index, _ensure_log_softmax
+from ..utils.rollout import _seq_logprob_ctc, _blank_index, _ensure_log_softmax, ppo_group_statistics, _same_num_hypotheses, _mean_mean
 
 class SCSTOptimizer:
     """
@@ -36,7 +36,16 @@ class SCSTOptimizer:
         """
         Compute baseline per audio.
         """
+
+        if _same_num_hypotheses(indexes) :
+
+            reward = reward
+
+        else : 
+            reward, _, _ = _mean_mean(reward, indexes)["indexes"]
+
         baseline = torch.zeros_like(reward)
+
         for uid in indexes.unique():
             mask = indexes == uid
             if method == "max":
@@ -89,6 +98,10 @@ class SCSTOptimizer:
             # Sequence log-prob per hypothesis (CTC)
             seq_logp = _seq_logprob_ctc(log_probs, input_lens, targets, target_lens, self.blank_idx)
 
+            if not _same_num_hypotheses(indexes) :
+
+                seq_logp, _, _ = _mean_mean(seq_logp, indexes)["indexes"]
+
             reward_p = self.alpha * reward + self.beta * wers.cos() - self.gamma * cers.sin()
 
             # Compute baseline per audio
@@ -99,10 +112,18 @@ class SCSTOptimizer:
             advantage = reward_p - baseline_p
             adv = reward - baseline
 
+            ADV = ppo_group_statistics(reward, baseline, indexes)
+            ADV_p = ppo_group_statistics(reward_p, baseline_p, indexes)
+
+
             # SCST loss
             loss = -(advantage.detach() * seq_logp).mean()
 
             loss_ = -(adv.detach() * seq_logp).mean()
+
+            l_ = -(ADV.detach() * seq_logp).mean()
+            l = -(ADV_p.detach() * seq_logp).mean()
+
 
         # Backprop with GradScaler (AMP aware)
         self.scaler.scale(loss).backward()
@@ -119,5 +140,9 @@ class SCSTOptimizer:
             "adv_p_mean": advantage.mean().item(),
             "baseline_mean": baseline.mean().item(),
             "adv_mean": adv.mean().item(),
-            "loss_" : loss_.item()
+            "loss_" : loss_.item(),
+            "ADV" :ADV.mean().item(),
+            "ADV_p" : ADV_p.mean().item(),
+            "l_n_p" : l.item(),
+            "l_n" : l_.item()
         }

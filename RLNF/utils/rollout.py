@@ -176,8 +176,8 @@ def ppo_group_statistics(
         adv = reward - values_old
         adv = (adv - adv.mean()) / (adv.std(unbiased=False) + eps)
 
-        critic_target = reward
-        mode = 0 #"flat_hypotheses"
+        #critic_target = reward
+        #mode = 0 #"flat_hypotheses"
 
     # --------------------------------------------------
     # CASE 2: Variable number of hypotheses per audio
@@ -188,12 +188,12 @@ def ppo_group_statistics(
         adv = _normalize_adv(adv, indexes, eps=eps)
 
         # Critic target = mean reward per audio
-        rewards_means, _, _ = _mean_mean(reward, indexes, only=False)
-        critic_target = rewards_means[indexes]
+        #rewards_means, _, _ = _mean_mean(reward, indexes, only=False)
+        #critic_target = rewards_means[indexes]
 
-        mode = 1 #"grouped_by_audio"
+        #mode = 1 #"grouped_by_audio"
 
-    return adv.detach(), critic_target.detach(), mode
+    return adv.detach() #, critic_target.detach(), mode
 
 @torch.no_grad()
 def decode_batch(
