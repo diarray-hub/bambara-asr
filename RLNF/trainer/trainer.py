@@ -1,301 +1,327 @@
 from typing import Dict
-import json
-import contextlib
-
+import os
 import torch
+import torch.distributed as dist
 from torch.utils.data import DataLoader
-from sentencepiece import SentencePieceProcessor
-
+from torch.utils.data.distributed import DistributedSampler
 from nemo.collections.asr.metrics.wer import word_error_rate
 from nemo.collections.asr.models import EncDecCTCModel, EncDecCTCModelBPE
-import wandb
 
+import wandb
 import datasets
+from tqdm import tqdm
+from torch.utils.tensorboard import SummaryWriter
+
+from RLNF.utils.rollout import collect_batch
+
 from ..dataloaders.reward_dataset import RewardDataCollator
 from ..Rewards.reward_processor import RewardModelProcessor
-
-from ..utils.rollout import collect_batch
-from ..optimizer.optimizer import PPOOptimizer
-from ..PPO.critic_network import CriticModel
-
 from ..Rewards.reward_model import RewardModel
-from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm
+from ..optimizer.optimizer import SCSTOptimizer
 
-class RLNFTrainer:
+
+class RLNFTrainerSCST:
     """
-    Trainer for RLNF (PPO on CTC sequence log-prob).
+    RLNF Trainer for SCST (Self-Critical Sequence Training) — Single & Multi-GPU (DDP) compatible.
     """
 
     def __init__(
         self,
         asr_model: EncDecCTCModel | EncDecCTCModelBPE,
         reward_model: RewardModel,
-        critic_model: CriticModel,
-        dataset : datasets,
-        processor : RewardModelProcessor,
+        dataset: datasets,
+        processor: RewardModelProcessor,
         device: torch.device,
         wandb_logging: bool = True,
         wandb_project: str = "Bambara-RLNF",
-        run_name: str = "test-run1",
+        run_name: str = "rlnf-scst",
         batch_size: int = 16,
         epochs: int = 3,
-        K_updates: int = 4,
         actor_lr: float = 1e-5,
-        critic_lr: float = 1e-4,
-        clip_eps: float = 0.2,
         val_every: int = 200,
         num_workers: int = 2,
         pin_memory: bool = True,
-        amp: bool = False,  # enable if you switch to GPU
+        amp: bool = False,
+        save_dir: str = "checkpoints",
+        save_best_by: str = "val/wer",
+        save_best_mode: str = "min",
+        baseline : str = "max",
+        use_lm: bool = True,
+        beam_size: int = 4,
+        resume_from_checkpoint: str | None = None,
     ):
-        self.asr_model = asr_model
-        self.reward_model = reward_model
-        self.critic_model = critic_model
+        # ================= DDP =================
+        self.is_distributed = dist.is_available() and dist.is_initialized()
+        self.rank = dist.get_rank() if self.is_distributed else 0
+        self.world_size = dist.get_world_size() if self.is_distributed else 1
+        self.is_main = self.rank == 0
+
         self.device = device
         self.processor = processor
+        self.reward_model = reward_model
         self.epochs = epochs
         self.val_every = val_every
-        
-        self.tb_writer = SummaryWriter(log_dir=f"tb_logs/{run_name}")
+        self.current_epoch = 0
+        self.batch_size = batch_size
+        self.use_lm = use_lm
+        self.beam_size = beam_size
+        self.resume_from_checkpoint = resume_from_checkpoint
+        self.global_step = 0
 
-        
-        train_ds = dataset["train"]
-        val_ds = dataset["test"]
-        
+        # ================= SAVE =================
+        self.save_dir = save_dir
+        os.makedirs(self.save_dir, exist_ok=True)
+        self.save_best_by = save_best_by
+        self.save_best_mode = save_best_mode
+        self.best_val = float("inf") if save_best_mode == "min" else -float("inf")
+        self.best_scst_loss = float("inf")
+
+        # ================= LOGGING =================
+        self.tb_writer = SummaryWriter(f"tb_logs/{run_name}") if self.is_main else None
+        self._use_wandb = wandb_logging and self.is_main
+        if self._use_wandb:
+            wandb.init(project=wandb_project, name=run_name)
+
+        # ================= DATA =================
         collate_fn = RewardDataCollator(processor=processor, augment=False)
-      
+        train_sampler = DistributedSampler(dataset["train"]) if self.is_distributed else None
+        val_sampler = DistributedSampler(dataset["test"], shuffle=False) if self.is_distributed else None
+
         self.train_loader = DataLoader(
-            train_ds,
+            dataset["train"],
             batch_size=batch_size,
-            shuffle=True,
+            sampler=train_sampler,
+            shuffle=train_sampler is None,
             collate_fn=collate_fn,
             num_workers=num_workers,
             pin_memory=pin_memory,
         )
 
         self.val_loader = DataLoader(
-            val_ds,
+            dataset["test"],
             batch_size=batch_size,
+            sampler=val_sampler,
             shuffle=False,
             collate_fn=collate_fn,
             num_workers=num_workers,
             pin_memory=pin_memory,
         )
 
-        self.current_epoch = None
-
-        # PPO
-        self.ppo = PPOOptimizer(
+        # ================= SCST =================
+        self.scst = SCSTOptimizer(
             actor=asr_model,
-            critic=critic_model,
-            clip_eps=clip_eps,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            K_updates=K_updates,
+            lr=actor_lr,
+            baseline=baseline,
             device=device,
-            amp=amp,
+            amp=amp
         )
 
-        # WandB
-        self._use_wandb = wandb_logging
-        if self._use_wandb:
-            wandb.init(
-                project=wandb_project,
-                name=run_name,
-                config={
-                    "batch_size": batch_size,
-                    "epochs": epochs,
-                    "K_updates": K_updates,
-                    "actor_lr": actor_lr,
-                    "critic_lr": critic_lr,
-                    "clip_eps": clip_eps,
-                    "amp": amp,
-                },
-            )
-
-
+    # =====================================================
+    # TRAIN
+    # =====================================================
     def train(self):
-        global_step = 0
-        try:
-            for epoch in range(self.epochs):
-                self.current_epoch = epoch
-                cfg = getattr(wandb, "config", {}) if self._use_wandb else {}
-                print(f"Starting epoch {epoch+1}/{self.epochs} | config: {cfg}")
+        if self.resume_from_checkpoint is not None:
+            self.load_checkpoint(self.resume_from_checkpoint)
 
-                # tqdm pour la boucle sur le DataLoader
-                pbar = tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{self.epochs}", leave=False)
+        global_step = self.global_step
+
+        try:
+            for epoch in range(self.current_epoch, self.epochs):
+                self.current_epoch = epoch
+                if self.is_distributed:
+                    self.train_loader.sampler.set_epoch(epoch)
+
+                pbar = tqdm(
+                    self.train_loader,
+                    disable=not self.is_main,
+                    desc=f"Epoch {epoch+1}/{self.epochs}",
+                )
+
                 for batch in pbar:
-                    # === On-policy rollout ===
+                    actor = self.scst.actor.module if self.is_distributed else self.scst.actor
+
+                    # === Collect batch ===
                     batch_dict = collect_batch(
                         batch=batch,
-                        asr_model=self.ppo.actor,
+                        asr_model=actor,
                         reward_model=self.reward_model,
-                        critic=self.ppo.critic,
                         processor=self.processor,
                         device=self.device,
+                        use_lm=self.use_lm,
+                        beam_size=self.beam_size
                     )
 
-                    # === PPO updates ===
-                    stats = self.ppo.update(batch_dict)
+                    # === Reward sync across GPUs ===
+                    if self.is_distributed:
+                        batch_dict["reward"] = batch_dict["reward"].to(self.device)
+                        torch.distributed.all_reduce(batch_dict["reward"], op=torch.distributed.ReduceOp.SUM)
+                        batch_dict["reward"] /= self.world_size
 
-                    # === Logging WandB et TensorBoard ===
-                    if self._use_wandb and wandb.run is not None:
-                        wandb.log(
-                            {
-                                "train/actor_loss": stats["actor_loss"],
-                                "train/critic_loss": stats["critic_loss"],
-                                "train/value_mean": stats["mean_value"],
-                                "train/adv_mean": stats.get("adv_mean", float("nan")),
-                                "train/adv_std": stats.get("adv_std", float("nan")),
-                                "train/ratio_mean": stats.get("ratio_mean", float("nan")),
-                                "train/frac_clipped": stats.get("frac_clipped", float("nan")),
-                                "train/reward_mean": stats.get("reward_mean", float("nan")),
-                                "train/value_hat_mean": stats.get("V_hat_mean", float("nan")),
-                            },
-                            step=global_step,
-                        )
+                    # === SCST update ===
+                    stats = self.scst.update(batch_dict)
 
-                        self.tb_writer.add_scalar("train/actor_loss", stats["actor_loss"], global_step)
-                        self.tb_writer.add_scalar("train/critic_loss", stats["critic_loss"], global_step)
-                        self.tb_writer.add_scalar("train/value_mean", stats["mean_value"], global_step)
-                        self.tb_writer.add_scalar("train/adv_mean", stats.get("adv_mean", float("nan")), global_step)
-                        self.tb_writer.add_scalar("train/adv_std", stats.get("adv_std", float("nan")), global_step)
-                        self.tb_writer.add_scalar("train/ratio_mean", stats.get("ratio_mean", float("nan")), global_step)
-                        self.tb_writer.add_scalar("train/frac_clipped", stats.get("frac_clipped", float("nan")), global_step)
-                        self.tb_writer.add_scalar("train/reward_mean", stats.get("reward_mean", float("nan")), global_step)
-                        self.tb_writer.add_scalar("train/value_hat_mean", stats.get("V_hat_mean", float("nan")), global_step)
+                    if self.is_main:
+                        scst_loss = stats["scst_loss"]
+                        if scst_loss < self.best_scst_loss:
+                            self.best_scst_loss = scst_loss
+                            self.save_actor_by_loss(global_step, scst_loss)
 
-                    # === Mettre à jour la barre tqdm ===
-                    pbar.set_postfix({
-                        "actor_loss": f"{stats['actor_loss']:.3f}",
-                        "critic_loss": f"{stats['critic_loss']:.3f}",
-                        "V": f"{stats['mean_value']:.3f}",
-                        "adv": f"{stats['adv_mean']:.3f}",
-                        "clip%": f"{100*stats['frac_clipped']:.1f}",
-                        "reward" : f"{stats['reward_mean']:.3f}",
-                        "ratio_mean": f"{stats['ratio_mean']:.3f}",
-                        "frac_clipped": f"{stats['frac_clipped']:.3f}"
-                        
-                    })
+                        # Logging
+                        if self._use_wandb and wandb.run is not None:
+                            wandb.log({f"train/{k}": v for k, v in stats.items()}, step=global_step)
+                        for k, v in stats.items():
+                            self.tb_writer.add_scalar(f"train/{k}", v, global_step)
+
+                        pbar.set_postfix({
+                            "scst_loss": f"{scst_loss:.4f}",
+                            "reward_mean": f"{stats['reward_mean']:.4f}"
+                        })
 
                     global_step += 1
 
-                    if (self.val_every > 0) and (global_step % self.val_every == 0):
+                    # Validation
+                    do_val = self.val_every > 0 and global_step % self.val_every == 0
+                    if self.is_distributed:
+                        val_tensor = torch.tensor(int(do_val), device=self.device)
+                        dist.broadcast(val_tensor, src=0)
+                        do_val = bool(val_tensor.item())
+                    if do_val:
                         self.validate(global_step)
-                        self.tb_writer.flush()
+                        self.save_checkpoint(global_step)
 
-                # Validation en fin d'époque
+                # End of epoch validation
                 self.validate(global_step, end_of_epoch=True)
 
-        except KeyboardInterrupt:
-            print("Interrupted — saving checkpoints and closing WandB.")
-        except MemoryError:
-            print("Memory error — saving checkpoints and closing WandB.")
         finally:
-            # Save final artifacts
-            try:
-                self.ppo.actor.save_to("actor_final.nemo")
-            except Exception as e:
-                print("Could not save actor:", e)
-            try:
-                self.critic_model.save_pretrained("critic_final")
-            except Exception as e:
-                print("Could not save critic:", e)
-            with contextlib.suppress(Exception):
+            if self.is_main:
+                self.save_final()
                 if self._use_wandb:
                     wandb.finish()
-            self.tb_writer.close()
+                self.tb_writer.close()
 
-
+    # =====================================================
+    # VALIDATION
+    # =====================================================
     def validate(self, step: int, end_of_epoch: bool = False):
-        # Eval mode
-        self.ppo.actor.eval()
-        self.ppo.critic.eval()
-        
-        mean_rewards, mean_values = [], []
-        wer, cer = 0.0, 0.0
+        actor = self.scst.actor.module if self.is_distributed else self.scst.actor
+        actor.eval()
 
-        # tqdm pour la validation
-        pbar_val = tqdm(self.val_loader, desc=f"Validation at step {step}", leave=False)
-        
+        wers, cers, rewards = [], [], []
+
         with torch.no_grad():
+
+            pbar_val = tqdm(self.val_loader, leave=False, disable=not self.is_main, desc=f"Validation at step {step}")
             for batch in pbar_val:
-                # Transcription batch audio
-                
-                model = self.ppo.actor
-                
-                """  model = model.to(self.device)
-                model.preprocessor.to(self.device)
-                model.encoder.to(self.device)
-                if hasattr(model, "decoder"):
-                    model.decoder.to(self.device)
-                """
-                
-                model.preprocessor.featurizer.to(self.device)
+                actor.spec_augmentation = None
+                actor.sample_rate = 16000
+                actor.preprocessor.featurizer.to(self.device)
 
-                model.sample_rate = 16000
-                model.spec_augmentation = None
-                
-                audio = [aud for aud in batch["_audio"]] #
-                
-                hyps = model.transcribe(audio, batch_size=8)
-
-                hyp_texts = [h.text for h in hyps]
-
-                # Décodage batch texte de référence
-                tokenizer = self.processor.tokenizer
-                refs = tokenizer.batch_decode(batch["text"], skip_special_tokens=True)
-
-                # WER/CER
-                wer = word_error_rate(hyp_texts, refs)
-                cer = word_error_rate(hyp_texts, refs, use_cer=True)
-                
-
-                # Reward/Value
                 val_dict = collect_batch(
                     batch=batch,
-                    asr_model=self.ppo.actor,
+                    asr_model=actor,
                     reward_model=self.reward_model,
-                    critic=self.ppo.critic,
                     processor=self.processor,
                     device=self.device,
+                    use_lm=self.use_lm,
+                    beam_size=self.beam_size
                 )
-                mean_rewards.append(float(val_dict["reward"].mean()))
-                mean_values.append(float(val_dict["values"].mean()))
 
-                # Mise à jour dynamique de la barre
+                # References
+                indexes = val_dict["indexes"]
+                expanded = batch["text"][indexes]
+                refs = [
+                    self.processor.tokenizer.batch_decode(expanded[indexes == i], skip_special_tokens=True)
+                    for i in torch.unique(indexes)
+                ]
+
+                # Compute WER/CER
+                wms, cms = self._wer_cer(val_dict["texts"], refs, indexes)
+                wers.append(wms)
+                cers.append(cms)
+
+                # Rewards mean
+                rewards.append(val_dict["reward"].mean())
+
+            # Aggregate metrics
+            if self.is_main:
+                string = f"WER: {sum(wers)/len(wers):.4f}, CER: {sum(cers)/len(cers):.4f}, Reward: {sum(rewards)/len(rewards):.4f}"
+                pbar_val.set_postfix_str(string)
                 pbar_val.set_postfix({
-                    "WER": f"{wer:.4f}",
-                    "CER": f"{cer:.4f}",
-                    "Reward": f"{float(val_dict['reward'].mean()):.4f}",
-                    "Value": f"{float(val_dict['values'].mean()):.4f}"
+                    "WER": f"{sum(wers)/len(wers):.4f}",
+                    "CER": f"{sum(cers)/len(cers):.4f}",
+                    "Reward": f"{sum(rewards)/len(rewards):.4f}",
                 })
 
-        # Moyennes sur tout le set de validation
-        mean_reward = sum(mean_rewards) / max(1, len(mean_rewards))
-        mean_value = sum(mean_values) / max(1, len(mean_values))
-       
+            # Save best
+            cur = sum(wers)/len(wers)
+            if (self.save_best_mode == "min" and cur < self.best_val) or (self.save_best_mode == "max" and cur > self.best_val):
+                self.best_val = cur
+                self.save_best(step)
 
-        to_log = {
-            "val/wer": wer,
-            "val/cer": cer,
-            "val/reward": mean_reward,
-            "val/value": mean_value,
+        actor.train()
+
+    # =====================================================
+    # SAVE / LOAD
+    # =====================================================
+    def save_best(self, step: int):
+        actor = self.scst.actor.module if self.is_distributed else self.scst.actor
+        path = os.path.join(self.save_dir, f"best_actor_step{step}.nemo")
+        try:
+            actor.save_to(path)
+            print(f"[save_best] actor saved -> {path}")
+        except Exception as e:
+            torch.save(actor.state_dict(), path.replace(".nemo", ".pt"))
+
+    def save_final(self):
+        actor = self.scst.actor.module if self.is_distributed else self.scst.actor
+        actor.save_to("actor_final.nemo")
+
+    def save_checkpoint(self, step: int, name="last"):
+        if not self.is_main:
+            return
+        actor = self.scst.actor.module if self.is_distributed else self.scst.actor
+        ckpt = {
+            "actor": actor.state_dict(),
+            "epoch": self.current_epoch,
+            "global_step": step,
+            "best_val": self.best_val,
+            "best_scst_loss": self.best_scst_loss,
         }
-        if end_of_epoch:
-            to_log["epoch"] = self.current_epoch
+        path = os.path.join(self.save_dir, f"checkpoint_step{step}.pt")
+        torch.save(ckpt, path)
 
-        # Logging WandB + TensorBoard
-        if self._use_wandb and wandb.run is not None:
-            wandb.log(to_log, step=step)
-            self.tb_writer.add_scalar("val/wer", to_log["val/wer"], step)
-            self.tb_writer.add_scalar("val/cer", to_log["val/cer"], step)
-            self.tb_writer.add_scalar("val/reward", to_log["val/reward"], step)
-            self.tb_writer.add_scalar("val/value", to_log["val/value"], step)
-            if "epoch" in to_log:
-                self.tb_writer.add_scalar("val/epoch", to_log["epoch"], step)
+    def load_checkpoint(self, path: str):
+        map_location = {"cuda:%d" % 0: "cuda:%d" % self.rank} if self.is_distributed else self.device
+        ckpt = torch.load(path, map_location=map_location)
+        actor = self.scst.actor.module if self.is_distributed else self.scst.actor
+        actor.load_state_dict(ckpt["actor"])
+        self.current_epoch = ckpt.get("epoch", 0)
+        self.global_step = ckpt.get("global_step", 0)
+        self.best_val = ckpt.get("best_val", self.best_val)
+        self.best_scst_loss = ckpt.get("best_scst_loss", self.best_scst_loss)
+        if self.is_main:
+            print(f"[checkpoint] resumed from {path} | epoch={self.current_epoch}, step={self.global_step}")
 
-        # Back to train mode
-        self.ppo.actor.train()
-        self.ppo.critic.train()
+    def save_actor_by_loss(self, step: int, scst_loss: float):
+        actor = self.scst.actor.module if self.is_distributed else self.scst.actor
+        path = os.path.join(self.save_dir, f"best_actor_by_loss_step{step}_loss{scst_loss:.4f}.nemo")
+        try:
+            actor.save_to(path)
+        except Exception as e:
+            torch.save(actor.state_dict(), path.replace(".nemo", ".pt"))
+
+    # =====================================================
+    # WER/CER
+    # =====================================================
+    def _wer_cer(self, hyps, refs, indexes):
+        wers = [
+            word_error_rate([refs[group_id][j]], [hyps[group_id][j]])
+            for group_id in range(len(refs))
+            for j in range(len(refs[group_id]))
+        ]
+        cers = [
+            word_error_rate([refs[group_id][j]], [hyps[group_id][j]], use_cer=True)
+            for group_id in range(len(refs))
+            for j in range(len(refs[group_id]))
+        ]
+        return torch.tensor(wers).mean(), torch.tensor(cers).mean()
