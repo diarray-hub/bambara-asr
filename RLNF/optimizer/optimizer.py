@@ -13,6 +13,9 @@ class SCSTOptimizer:
         self,
         actor: EncDecCTCModel | EncDecCTCModelBPE,
         lr: float = 1e-5,
+        alpha : float = 1.0,
+        beta : float = 0.2,
+        gamma : float = 0.1,
         baseline: str = "max",  # "max" or "mean"
         device: torch.device = torch.device("cpu"),
         amp: bool = False
@@ -24,6 +27,9 @@ class SCSTOptimizer:
         self.blank_idx = _blank_index(actor)
         self.amp = amp
         self.scaler = torch.cuda.amp.GradScaler(enabled=amp)
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
 
     @staticmethod
     def _compute_baseline(reward: torch.Tensor, indexes: torch.Tensor, method: str = "max") -> torch.Tensor:
@@ -63,6 +69,9 @@ class SCSTOptimizer:
         reward = batch["reward"].to(self.device)
         indexes = batch["indexes"].to(self.device)
 
+        wers = batch["wers"].to(self.device)
+        cers = batch["cers"].to(self.device)
+
         self.actor.train()
         self.opt.zero_grad()
 
@@ -80,14 +89,20 @@ class SCSTOptimizer:
             # Sequence log-prob per hypothesis (CTC)
             seq_logp = _seq_logprob_ctc(log_probs, input_lens, targets, target_lens, self.blank_idx)
 
+            reward_p = self.alpha * reward + self.beta * wers.cos() - self.gamma * cers.sin()
+
             # Compute baseline per audio
+            baseline_p = self._compute_baseline(reward_p, indexes, self.baseline)
             baseline = self._compute_baseline(reward, indexes, self.baseline)
 
             # Advantage = reward - baseline
-            advantage = reward - baseline
+            advantage = reward_p - baseline_p
+            adv = reward - baseline
 
             # SCST loss
             loss = -(advantage.detach() * seq_logp).mean()
+
+            loss_ = -(adv.detach() * seq_logp).mean()
 
         # Backprop with GradScaler (AMP aware)
         self.scaler.scale(loss).backward()
@@ -99,6 +114,10 @@ class SCSTOptimizer:
         return {
             "scst_loss": loss.item(),
             "reward_mean": reward.mean().item(),
+            "reward_p" : reward_p.mean().item(),
+            "baseline_p_mean": baseline_p.mean().item(),
+            "adv_p_mean": advantage.mean().item(),
             "baseline_mean": baseline.mean().item(),
-            "adv_mean": advantage.mean().item()
+            "adv_mean": adv.mean().item(),
+            "loss_" : loss_.item()
         }

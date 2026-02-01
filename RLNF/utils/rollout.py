@@ -9,7 +9,22 @@ from ..Rewards.reward_processor import RewardModelProcessor
 import torch.nn.functional as F
 import importlib.resources as rsc
 import RLNF.ressources
+from nemo.collections.asr.metrics.wer import word_error_rate
 
+def _wer_cer(hyps, refs, compute : bool = True):
+
+    wers = [
+        word_error_rate([refs[group_id][j]], [hyps[group_id][j]])
+        for group_id in range(len(refs))
+        for j in range(len(refs[group_id]))
+    ]
+    cers = [
+        word_error_rate([refs[group_id][j]], [hyps[group_id][j]], use_cer=True)
+        for group_id in range(len(refs))
+        for j in range(len(refs[group_id]))
+    ]
+
+    return (torch.tensor(wers).mean(), torch.tensor(cers).mean()) if compute else (torch.tensor(wers), torch.tensor(cers))
 
 def _mean_mean(T: torch.Tensor, indexes : torch.Tensor, only = True) -> Tuple[torch.Tensor] :
     
@@ -459,7 +474,14 @@ def collect_batch(
         #values_all = torch.cat(V, dim=0)
         
         indexes = torch.repeat_interleave(torch.arange(len(K)), torch.tensor(K, dtype=torch.long))
-        
+    
+    expanded = batch["text"][indexes]
+    refs = [processor.tokenizer.batch_decode(expanded[indexes == i], skip_special_tokens=True)
+                    for i in torch.unique(indexes)]
+    
+    wms, cms = _wer_cer(transcriptions, refs, compute=False)
+   
+    
     # Return CPU payload only; keep raw text too (tiny memory footprint)
     return {
         "audio_batch": audio_all.cpu(),
@@ -472,6 +494,8 @@ def collect_batch(
         #"values": values_all.cpu(),               # [K_i]
         "texts": transcriptions,              # keep raw strings for reward/debug
         "indexes" : indexes.cpu(),
+        "wers" : wms.cpu(),
+        "cers" : cms.cpu()
         #
         # reward model text batch is not needed after reward is computed; not stored
     }

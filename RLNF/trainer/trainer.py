@@ -4,7 +4,6 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-from nemo.collections.asr.metrics.wer import word_error_rate
 from nemo.collections.asr.models import EncDecCTCModel, EncDecCTCModelBPE
 
 import wandb
@@ -12,7 +11,7 @@ import datasets
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 
-from RLNF.utils.rollout import collect_batch
+from RLNF.utils.rollout import collect_batch, _wer_cer
 
 from ..dataloaders.reward_dataset import RewardDataCollator
 from ..Rewards.reward_processor import RewardModelProcessor
@@ -39,6 +38,9 @@ class RLNFTrainerSCST:
         epochs: int = 3,
         actor_lr: float = 1e-5,
         val_every: int = 200,
+        alpha : float = 1.0,
+        beta : float = 0.2,
+        gamma : float = 0.1,
         num_workers: int = 2,
         pin_memory: bool = True,
         amp: bool = False,
@@ -111,6 +113,9 @@ class RLNFTrainerSCST:
         self.scst = SCSTOptimizer(
             actor=asr_model,
             lr=actor_lr,
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma,
             baseline=baseline,
             device=device,
             amp=amp
@@ -235,7 +240,7 @@ class RLNFTrainerSCST:
                 ]
 
                 # Compute WER/CER
-                wms, cms = self._wer_cer(val_dict["texts"], refs, indexes)
+                wms, cms = _wer_cer(val_dict["texts"], refs)
                 wers.append(wms)
                 cers.append(cms)
 
@@ -323,15 +328,4 @@ class RLNFTrainerSCST:
     # =====================================================
     # WER/CER
     # =====================================================
-    def _wer_cer(self, hyps, refs, indexes):
-        wers = [
-            word_error_rate([refs[group_id][j]], [hyps[group_id][j]])
-            for group_id in range(len(refs))
-            for j in range(len(refs[group_id]))
-        ]
-        cers = [
-            word_error_rate([refs[group_id][j]], [hyps[group_id][j]], use_cer=True)
-            for group_id in range(len(refs))
-            for j in range(len(refs[group_id]))
-        ]
-        return torch.tensor(wers).mean(), torch.tensor(cers).mean()
+    
