@@ -5,7 +5,6 @@ from typing import List, Dict, Tuple
 from torch.nn.utils.rnn import pad_sequence
 from nemo.collections.asr.models import EncDecCTCModel, EncDecCTCModelBPE
 from ..Rewards.reward_model import RewardModel
-from ..PPO.critic_network import CriticModel
 from ..Rewards.reward_processor import RewardModelProcessor
 import torch.nn.functional as F
 import importlib.resources as rsc
