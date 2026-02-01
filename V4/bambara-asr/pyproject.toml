@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "RLNF"
+version = "0.1.0"
+description = "RLNF-ASR"
+authors = [{name = "Panga Azazia", email = "kamatep37@gmail.com"}]
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+dependencies = [
+    "torch",
+    "torchaudio",
+    "datasets==3.3.2",
+    "nemo_toolkit[asr]",
+    "transformers",
+    "numpy",
+]
+
+[tool.setuptools.packages.find]
+include = ["RLNF*"]
+
+[tool.setuptools.package-data]
+"RLNF" = ["resources/*.bin"]
