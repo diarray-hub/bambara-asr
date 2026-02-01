@@ -17,14 +17,14 @@ This repository is licensed under the MIT License. See [LICENSE](LICENSE) for de
 Before you try to experiment with Reinforcement Learning from Nouhoum Feedback
 
    ```bash
-   git clone https://github.com/diarray-hub/bambara-asr.git --branch=rlnf-v2-gpu
+   git clone https://github.com/diarray-hub/bambara-asr.git --branch=rlnf-v4-gpu
   cd bambara-asr
    pip install .
    ```
 
 OR 
 ```bash
-pip install git+https://github.com/diarray-hub/bambara-asr.git@rlnf-v2-gpu
+pip install git+https://github.com/diarray-hub/bambara-asr.git@rlnf-v4-gpu
 ```
 
 ## How to use this package:
@@ -77,6 +77,7 @@ coming soon......
 **want to test the RLNF model**
 
 coming soon......
+
 
 
 
