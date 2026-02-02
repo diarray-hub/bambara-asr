@@ -91,8 +91,8 @@ class SCSTOptimizer:
         wers = batch["wers"].to(self.device)
         cers = batch["cers"].to(self.device)
 
-        wers_greedy = batch["wers"].to(self.device)
-        cers_greedy = batch["cers"].to(self.device)
+        #wers_greedy = batch["wers"].to(self.device)
+        #cers_greedy = batch["cers"].to(self.device)
 
         greedy_rewards = batch["greedy"].to(self.device)
 

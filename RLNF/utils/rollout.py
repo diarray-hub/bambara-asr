@@ -502,7 +502,7 @@ def collect_batch(
                     for i in torch.unique(indexes)]
     
     wms, cms = _wer_cer(transcriptions, refs, compute=False)
-    wms_greedy, cms_greedy = _wer_cer(greedy_trans, [greedy_refs], compute=False)
+    #wms_greedy, cms_greedy = _wer_cer(greedy_trans, [greedy_refs], compute=False)
 
    
     
@@ -521,8 +521,8 @@ def collect_batch(
         "wers" : wms.cpu(),
         "cers" : cms.cpu(),
         "greedy" : greedy_rewards.cpu(),
-        "wers_greedy" : wms_greedy.cpu(),
-        "cers_greedy" : cms_greedy.cpu(),
+        #"wers_greedy" : wms_greedy.cpu(),
+        #"cers_greedy" : cms_greedy.cpu(),
         #
         # reward model text batch is not needed after reward is computed; not stored
     }
