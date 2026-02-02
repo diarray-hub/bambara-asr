@@ -229,7 +229,7 @@ def decode_batch(
     
     
     if hasattr(asr.decoding, "ctc_decoder_predictions_tensor"):
-        hyps = asr_model.decoding.ctc_decoder_predictions_tensor(
+        hyps = asr.decoding.ctc_decoder_predictions_tensor(
             decoder_outputs=log_probs, decoder_lengths=enc_len, fold_consecutive=False,return_hypotheses=return_hypotheses
         )
     else:
