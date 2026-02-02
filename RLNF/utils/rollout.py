@@ -385,7 +385,7 @@ def collect_batch(
         # === ensure log-probs for both decoding & CTCLoss ===
         log_probs3d = _ensure_log_softmax(logits_or_logp3d)
 
-        greedy_trans = decode_batch(log_probs3d, enc_len, asr_model, use_lm=False, beam_size=1)
+        greedy_trans = decode_batch(log_probs3d, enc_len, asr_model, use_lm=False, beam_size=1, return_hypotheses=True)
 
         # Decode to text (for reward model & diagnostics)
         transcriptions = decode_batch(log_probs3d, enc_len, asr_model, use_lm=use_lm, beam_size=beam_size)
