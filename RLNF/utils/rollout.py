@@ -235,7 +235,7 @@ def decode_batch(
     else:
         raise AttributeError("Only CTC models are supported for now.")
     
-    return [[h.text for h in hyp] for hyp in hyps] if use_lm else [h.text for h in hyps]
+    return [[h.text for h in hyp] for hyp in hyps] if isinstance(hyps, list) else hyps
 
 
 def _blank_index(asr_model: EncDecCTCModel) -> int:
@@ -389,7 +389,6 @@ def collect_batch(
         log_probs3d = _ensure_log_softmax(logits_or_logp3d)
 
         greedy_trans = decode_batch(log_probs3d, enc_len, asr_model, use_lm=False)
-
         print(greedy_trans)
 
         # Decode to text (for reward model & diagnostics)
