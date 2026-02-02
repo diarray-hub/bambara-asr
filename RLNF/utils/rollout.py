@@ -502,7 +502,14 @@ def collect_batch(
                     for i in torch.unique(indexes)]
     
     wms, cms = _wer_cer(transcriptions, refs, compute=False)
-    #wms_greedy, cms_greedy = _wer_cer(greedy_trans, [greedy_refs], compute=False)
+    try : 
+
+        wms_greedy, cms_greedy = _wer_cer(greedy_trans, [greedy_refs], compute=False)
+        
+    except :
+
+        print(greedy_trans)
+        print(greedy_refs)
 
    
     
@@ -520,7 +527,7 @@ def collect_batch(
         "indexes" : indexes.cpu(),
         "wers" : wms.cpu(),
         "cers" : cms.cpu(),
-        "greedy" : greedy_rewards.cpu(),
+        "greedy" : greedy_rewards.cpu()
         #"wers_greedy" : wms_greedy.cpu(),
         #"cers_greedy" : cms_greedy.cpu(),
         #

@@ -116,7 +116,7 @@ class SCSTOptimizer:
            
 
             baseline_wers = self._compute_baseline(wers, indexes, method=self.baseline, greedy_reward=greedy_rewards)
-            baseline_cers = self._compute_baseline(cers, indexes, method=self.baseline, greedy_rewards=greedy_rewards)
+            baseline_cers = self._compute_baseline(cers, indexes, method=self.baseline, greedy_reward=greedy_rewards)
 
             wer_c = _group_statistics(-wers, baseline_wers,indexes)
             cer_c = _group_statistics(-cers, baseline_cers,indexes)
