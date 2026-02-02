@@ -247,14 +247,14 @@ class RLNFTrainerSCST:
                 # Rewards mean
                 rewards.append(val_dict["reward"].mean())
 
-                if self._use_wandb:
-                    wandb.log({
-                        "val/wer": sum(wers)/len(wers),
-                        "val/cer": sum(cers)/len(cers),
-                        "val/reward": sum(rewards)/len(rewards),
-                        "step": step,
-                        "reward" : sum(rewards)/len(rewards)
-                    })
+                #if self._use_wandb:
+                #    wandb.log({
+                #        "val/wer": sum(wers)/len(wers),
+                #        "val/cer": sum(cers)/len(cers),
+                #        "val/reward": sum(rewards)/len(rewards),
+                #        "step": step,
+                #        "reward" : sum(rewards)/len(rewards)
+                #    })
 
 
             # =======================
@@ -264,22 +264,15 @@ class RLNFTrainerSCST:
             mean_cer = sum(cers) / len(cers)
             mean_reward = sum(rewards) / len(rewards)
 
-            if self.is_main:
-                print(
-                    f"[VAL] step={step} | "
-                    f"WER={mean_wer:.4f} | "
-                    f"CER={mean_cer:.4f} | "
-                    f"Reward={mean_reward:.4f}"
-                )
+            # ---- WandB logging ----
+            if self._use_wandb:
 
-                # ---- WandB logging ----
-                if self._use_wandb:
-                    wandb.log({
-                        "val/wer": mean_wer,
-                        "val/cer": mean_cer,
-                        "val/reward": mean_reward,
-                        "val/best_wer": self.best_val,
-                    }, step=step)
+                wandb.log({
+                    "val/wer": mean_wer,
+                    "val/cer": mean_cer,
+                    "val/reward": mean_reward,
+                    "val/best_wer": self.best_val,
+                }, step=step)
 
             # =======================
             # Save if WER improved
