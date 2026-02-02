@@ -183,9 +183,7 @@ def _group_statistics(
         adv = reward - values_old
         adv = (adv - adv.mean()) / (adv.std(unbiased=False) + eps)
 
-        #critic_target = reward
-        #mode = 0 #"flat_hypotheses"
-
+        
     # --------------------------------------------------
     # CASE 2: Variable number of hypotheses per audio
     # --------------------------------------------------
@@ -194,11 +192,6 @@ def _group_statistics(
         adv = reward - values_old
         adv = _normalize_adv(adv, indexes, eps=eps)
 
-        # Critic target = mean reward per audio
-        #rewards_means, _, _ = _mean_mean(reward, indexes, only=False)
-        #critic_target = rewards_means[indexes]
-
-        #mode = 1 #"grouped_by_audio"
 
     return adv.detach() #, critic_target.detach(), mode
 
@@ -395,6 +388,24 @@ def collect_batch(
         # Decode to text (for reward model & diagnostics)
         transcriptions = decode_batch(log_probs3d, enc_len, asr_model, use_lm=use_lm, beam_size=beam_size)
 
+        greedy_trans = decode_batch(log_probs3d, enc_len, asr_model, use_lm=False, beam_size=1)
+        greedy_rewards = []
+        for i, g_tra in enumerate(greedy_trans):
+            g_text = [g_tra[0]]  # single hypo
+            tran = processor.tokenizer.batch_encode_plus(g_text, return_attention_mask=True, padding=True, return_tensors="pt")
+            audio_i = audios[i].unsqueeze(0)  # [1, T, F]
+            audio_len = audio_lens[i].unsqueeze(0)
+            reward_model_input = {
+                "audio": audio_i,
+                "audio_len": audio_len,
+                "text": tran["input_ids"],
+                "text_attention_mask": tran["attention_mask"],
+            }
+            reward_model_input = {k: v.to(device) if torch.is_tensor(v) else v for k, v in reward_model_input.items()}
+            g_reward = reward_model(**reward_model_input).logits.item()
+            greedy_rewards.append(g_reward)
+        greedy_rewards = torch.tensor(greedy_rewards, device=device)
+
         
         for i, tra in enumerate(transcriptions) :
         
@@ -502,7 +513,8 @@ def collect_batch(
         "texts": transcriptions,              # keep raw strings for reward/debug
         "indexes" : indexes.cpu(),
         "wers" : wms.cpu(),
-        "cers" : cms.cpu()
+        "cers" : cms.cpu(),
+        "greedy" : greedy_rewards.cpu()
         #
         # reward model text batch is not needed after reward is computed; not stored
     }

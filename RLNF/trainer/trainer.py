@@ -42,7 +42,9 @@ class RLNFTrainerSCST:
         beta : float = 0.2,
         gamma : float = 0.1,
         num_workers: int = 2,
+        ent_coeff : float = 0.01,
         pin_memory: bool = True,
+        regularize : bool = False,
         amp: bool = False,
         save_dir: str = "checkpoints",
         save_best_by: str = "val/wer",
@@ -117,6 +119,8 @@ class RLNFTrainerSCST:
             beta=beta,
             gamma=gamma,
             baseline=baseline,
+            ent_coeff=ent_coeff,
+            regularize=regularize,
             device=device,
             amp=amp
         )

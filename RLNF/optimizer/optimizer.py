@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from nemo.collections.asr.models import EncDecCTCModel, EncDecCTCModelBPE
 from typing import Dict
-from ..utils.rollout import _seq_logprob_ctc, _blank_index, _ensure_log_softmax, _group_statistics, _center_only
+from ..utils.rollout import _seq_logprob_ctc, _blank_index, _ensure_log_softmax, _normalize_adv, _group_statistics
 
 class SCSTOptimizer:
     """
@@ -16,7 +16,9 @@ class SCSTOptimizer:
         alpha : float = 1.0,
         beta : float = 0.5,
         gamma : float = 0.2,
-        baseline: str = "max",  # "max" or "mean"
+        ent_coeff : float = 0.01,
+        regularize : bool = False,
+        baseline: str = "max",  # "max" or "mean" or "greedy"
         device: torch.device = torch.device("cpu"),
         amp: bool = False
     ):
@@ -30,23 +32,38 @@ class SCSTOptimizer:
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
+        self.ent_coeff = ent_coeff
+        self.regularize = regularize
 
     @staticmethod
-    def _compute_baseline(reward: torch.Tensor, indexes: torch.Tensor, method: str = "max") -> torch.Tensor:
+    def _compute_baseline(reward: torch.Tensor, indexes: torch.Tensor, method: str = "max",
+                          greedy_reward : torch.Tensor = None) -> torch.Tensor:
         """
         Compute baseline per audio.
         """
 
         baseline = torch.zeros_like(reward)
 
-        for uid in indexes.unique():
-            mask = indexes == uid
-            if method == "max":
-                baseline[mask] = reward[mask].max()
-            elif method == "mean":
-                baseline[mask] = reward[mask].mean()
-            else:
-                raise ValueError(f"Unknown baseline method: {method}")
+        if method == "greedy" :
+
+            if greedy_reward is None or len(greedy_reward) != len(indexes.unique()) : 
+                raise ValueError("greedy_rewards required for method='greedy'")
+            
+            for i, uid in enumerate(indexes.unique()) : 
+                mask = indexes == uid
+                baseline[mask] = greedy_reward[i]
+
+        else : 
+
+            for uid in indexes.unique():
+                mask = indexes == uid
+                if method == "max":
+                    baseline[mask] = reward[mask].max()
+                elif method == "mean":
+                    baseline[mask] = reward[mask].mean()
+                else:
+                    raise ValueError(f"Unknown baseline method: {method}")
+                
         return baseline
 
     def update(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
@@ -74,6 +91,8 @@ class SCSTOptimizer:
         wers = batch["wers"].to(self.device)
         cers = batch["cers"].to(self.device)
 
+        greedy_rewards = batch["greedy_rewards"].to(self.device)
+
         self.actor.train()
         self.opt.zero_grad()
 
@@ -91,8 +110,8 @@ class SCSTOptimizer:
             # Sequence log-prob per hypothesis (CTC)
             seq_logp = _seq_logprob_ctc(log_probs, input_lens, targets, target_lens, self.blank_idx)
 
-            wer_c = - _center_only(wers, indexes)
-            cer_c = - _center_only(cers, indexes)
+            wer_c = _normalize_adv(-wers, indexes)
+            cer_c = _normalize_adv(-cers, indexes)
 
             #wer_c = wer_c / (wer_c.abs().max(dim=0, keepdim=True)[0] + 1e-8)
             #cer_c = cer_c / (cer_c.abs().max(dim=0, keepdim=True)[0] + 1e-8)
@@ -100,8 +119,9 @@ class SCSTOptimizer:
 
             reward_p = self.alpha * reward + self.beta * wer_c.tanh() - self.gamma * cer_c.tanh()
 
+
             # Compute baseline per audio
-            baseline_p = self._compute_baseline(reward_p, indexes, self.baseline)
+            baseline_p = self._compute_baseline(reward_p, indexes, self.baseline, greedy_reward=greedy_rewards)
             
             # Advantage = reward - baseline
             advantage = _group_statistics(reward=reward_p, values_old=baseline_p, indexes=indexes)
@@ -111,9 +131,17 @@ class SCSTOptimizer:
             adv_std = advantage.std(unbiased=False).item()
             seq_logp_mean = seq_logp.mean().item()
             seq_logp_std = seq_logp.std(unbiased=False).item()
-                    
-            # SCST loss
-            loss = -(advantage * seq_logp).mean()
+
+            if self.regularize :
+
+                probs = log_probs.exp()
+                entropy_per_step = -(probs * log_probs).sum(dim=-1)
+                entropy = entropy_per_step.mean()
+                loss = -(advantage * seq_logp).mean() - self.ent_coeff * entropy
+
+            else : 
+
+                loss = -(advantage * seq_logp).mean() 
 
         # Backprop with GradScaler (AMP aware)
         self.scaler.scale(loss).backward()
