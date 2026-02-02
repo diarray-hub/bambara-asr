@@ -208,12 +208,15 @@ def decode_batch(
     """
     Decode a batch of CTC log-probs [B, T, V] to text using NeMo's decoder.
     """
+
+    asr = asr_model
+
     if use_lm :
         
         kenlm_path = rsc.files(RLNF.ressources) / "5gram_bambara.bin"
         kenlm_path = str(kenlm_path) 
         
-        decoding_cfg = asr_model.cfg.decoding
+        decoding_cfg = asr.cfg.decoding
         decoding_cfg.strategy = "pyctcdecode"
         decoding_cfg.beam.beam_size = beam_size           
         decoding_cfg.beam.return_best_hypothesis = False
@@ -222,10 +225,10 @@ def decode_batch(
         decoding_cfg.beam.beta = 1.5
         decoding_cfg.beam.search_type = "pyctcdecode"
 
-        asr_model.change_decoding_strategy(decoding_cfg)
+        asr.change_decoding_strategy(decoding_cfg)
     
     
-    if hasattr(asr_model.decoding, "ctc_decoder_predictions_tensor"):
+    if hasattr(asr.decoding, "ctc_decoder_predictions_tensor"):
         hyps = asr_model.decoding.ctc_decoder_predictions_tensor(
             decoder_outputs=log_probs, decoder_lengths=enc_len, fold_consecutive=False,return_hypotheses=return_hypotheses
         )
