@@ -388,7 +388,7 @@ def collect_batch(
         # === ensure log-probs for both decoding & CTCLoss ===
         log_probs3d = _ensure_log_softmax(logits_or_logp3d)
 
-        greedy_trans = decode_batch(log_probs3d, enc_len, asr_model, use_lm=False, beam_size=1, return_hypotheses=True)
+        greedy_trans = decode_batch(log_probs3d, enc_len, asr_model, use_lm=False)
 
         print(greedy_trans)
 
