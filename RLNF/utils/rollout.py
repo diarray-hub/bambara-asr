@@ -138,7 +138,14 @@ def _same_num_hypotheses(indexes: torch.Tensor) -> bool:
     _, counts = torch.unique(indexes, return_counts=True)
     return torch.all(counts == counts[0]).item()
 
-def ppo_group_statistics(
+def _center_only(x, indexes):
+    x_c = torch.empty_like(x)
+    for i in torch.unique(indexes):
+        m = x[indexes == i].mean()
+        x_c[indexes == i] = x[indexes == i] - m
+    return x_c
+
+def _group_statistics(
     reward: torch.Tensor,
     values_old: torch.Tensor,
     indexes: torch.Tensor,

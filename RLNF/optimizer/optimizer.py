@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from nemo.collections.asr.models import EncDecCTCModel, EncDecCTCModelBPE
 from typing import Dict
-from ..utils.rollout import _seq_logprob_ctc, _blank_index, _ensure_log_softmax, ppo_group_statistics, _same_num_hypotheses, _mean_mean
+from ..utils.rollout import _seq_logprob_ctc, _blank_index, _ensure_log_softmax, _group_statistics, _center_only
 
 class SCSTOptimizer:
     """
@@ -14,8 +14,8 @@ class SCSTOptimizer:
         actor: EncDecCTCModel | EncDecCTCModelBPE,
         lr: float = 1e-5,
         alpha : float = 1.0,
-        beta : float = 0.2,
-        gamma : float = 0.1,
+        beta : float = 0.5,
+        gamma : float = 0.2,
         baseline: str = "max",  # "max" or "mean"
         device: torch.device = torch.device("cpu"),
         amp: bool = False
@@ -36,15 +36,6 @@ class SCSTOptimizer:
         """
         Compute baseline per audio.
         """
-
-        if _same_num_hypotheses(indexes) :
-
-            reward = reward
-
-        else : 
-            reward, _, _ = _mean_mean(reward, indexes, False)
-
-            reward = reward[indexes]
 
         baseline = torch.zeros_like(reward)
 
@@ -100,33 +91,29 @@ class SCSTOptimizer:
             # Sequence log-prob per hypothesis (CTC)
             seq_logp = _seq_logprob_ctc(log_probs, input_lens, targets, target_lens, self.blank_idx)
 
-            if not _same_num_hypotheses(indexes) :
-                
-                seq_logp, _, _ = _mean_mean(seq_logp, indexes, False)
-                seq_logp = seq_logp[indexes]
+            wer_c = - _center_only(wers, indexes)
+            cer_c = - _center_only(cers, indexes)
 
-            reward_p = self.alpha * reward + self.beta * wers.cos() - self.gamma * cers.sin()
+            #wer_c = wer_c / (wer_c.abs().max(dim=0, keepdim=True)[0] + 1e-8)
+            #cer_c = cer_c / (cer_c.abs().max(dim=0, keepdim=True)[0] + 1e-8)
+
+
+            reward_p = self.alpha * reward + self.beta * wer_c.tanh() - self.gamma * cer_c.tanh()
 
             # Compute baseline per audio
             baseline_p = self._compute_baseline(reward_p, indexes, self.baseline)
-            baseline = self._compute_baseline(reward, indexes, self.baseline)
-
+            
             # Advantage = reward - baseline
-            advantage = reward_p - baseline_p
-            adv = reward - baseline
+            advantage = _group_statistics(reward=reward_p, values_old=baseline_p, indexes=indexes)
 
-            ADV = ppo_group_statistics(reward, baseline, indexes)
-            ADV_p = ppo_group_statistics(reward_p, baseline_p, indexes)
-
-
+            # Diagnostics BEFORE detach
+            adv_mean = advantage.mean().item()
+            adv_std = advantage.std(unbiased=False).item()
+            seq_logp_mean = seq_logp.mean().item()
+            seq_logp_std = seq_logp.std(unbiased=False).item()
+                    
             # SCST loss
-            loss = -(advantage.detach() * seq_logp).mean()
-
-            loss_ = -(adv.detach() * seq_logp).mean()
-
-            l_ = -(ADV.detach() * seq_logp).mean()
-            l = -(ADV_p.detach() * seq_logp).mean()
-
+            loss = -(advantage * seq_logp).mean()
 
         # Backprop with GradScaler (AMP aware)
         self.scaler.scale(loss).backward()
@@ -135,17 +122,27 @@ class SCSTOptimizer:
         self.scaler.step(self.opt)
         self.scaler.update()
 
+        # Grad-norm diagnostic (sample few params)
+        total_grad_norm = 0.0
+        cnt = 0
+        for p in self.actor.parameters():
+            if p.grad is not None:
+                total_grad_norm += p.grad.detach().norm().item()
+                cnt += 1
+        avg_grad_norm = (total_grad_norm / cnt) if cnt else 0.0
+
         return {
-            "scst_loss": loss.item(),
-            "reward_mean": reward.mean().item(),
-            "reward_p" : reward_p.mean().item(),
-            "baseline_p_mean": baseline_p.mean().item(),
-            "adv_p_mean": advantage.mean().item(),
-            "baseline_mean": baseline.mean().item(),
-            "adv_mean": adv.mean().item(),
-            "loss_" : loss_.item(),
-            "ADV" :ADV.mean().item(),
-            "ADV_p" : ADV_p.mean().item(),
-            "l_n_p" : l.item(),
-            "l_n" : l_.item()
+            "scst_loss": float(loss.detach().cpu()),
+            "adv_mean": adv_mean,
+            "adv_std": adv_std,
+            "seq_logp_mean": seq_logp_mean,
+            "seq_logp_std": seq_logp_std,
+            "reward_mean": float(reward.mean().cpu()),
+            "reward_p_mean": float(reward_p.mean().cpu()),
+            "baseline_p_mean": float(baseline_p.mean().cpu()),
+            "avg_grad_norm": avg_grad_norm,
+            "cos(wers)_mean" : wers.cos().mean().cpu(),
+            "sin(cers)_mean" : cers.sin().mean().cpu(),
+            "cer_c_mean" : cer_c.tanh().mean().cpu(),
+            "wer_c_mean" : wer_c.tanh().mean().cpu()
         }
