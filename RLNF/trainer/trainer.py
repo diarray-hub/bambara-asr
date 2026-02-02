@@ -167,8 +167,8 @@ class RLNFTrainerSCST:
 
                     if self.is_main:
                         scst_loss = stats["scst_loss"]
-                        if scst_loss < self.best_scst_loss:
-                            self.best_scst_loss = scst_loss
+                        if abs(scst_loss) < abs(self.best_scst_loss):
+                            self.best_scst_loss = abs(scst_loss)
                             self.save_actor_by_loss(global_step, scst_loss)
 
                         # Logging
