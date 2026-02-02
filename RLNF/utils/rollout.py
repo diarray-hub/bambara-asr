@@ -190,7 +190,7 @@ def _group_statistics(
     else:
         # Advantage normalized per audio
         #adv = reward - values_old
-        adv = _normalize_adv(adv, indexes, eps=eps)
+        adv = _normalize_adv(reward, indexes, eps=eps)
 
 
     return adv.detach() #, critic_target.detach(), mode
