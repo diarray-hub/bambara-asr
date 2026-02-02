@@ -385,10 +385,11 @@ def collect_batch(
         # === ensure log-probs for both decoding & CTCLoss ===
         log_probs3d = _ensure_log_softmax(logits_or_logp3d)
 
+        greedy_trans = decode_batch(log_probs3d, enc_len, asr_model, use_lm=False, beam_size=1)
+
         # Decode to text (for reward model & diagnostics)
         transcriptions = decode_batch(log_probs3d, enc_len, asr_model, use_lm=use_lm, beam_size=beam_size)
 
-        greedy_trans = decode_batch(log_probs3d, enc_len, asr_model, use_lm=False, beam_size=1)
 
         greedy_rewards = []
         for i, g_tra in enumerate(greedy_trans):
@@ -505,7 +506,7 @@ def collect_batch(
     try : 
 
         wms_greedy, cms_greedy = _wer_cer(greedy_trans, [greedy_refs], compute=False)
-        
+
     except :
 
         print(greedy_trans)
