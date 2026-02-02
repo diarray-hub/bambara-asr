@@ -390,6 +390,8 @@ def collect_batch(
 
         greedy_trans = decode_batch(log_probs3d, enc_len, asr_model, use_lm=False, beam_size=1, return_hypotheses=True)
 
+        print(greedy_trans)
+
         # Decode to text (for reward model & diagnostics)
         transcriptions = decode_batch(log_probs3d, enc_len, asr_model, use_lm=use_lm, beam_size=beam_size)
 
