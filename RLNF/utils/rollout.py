@@ -235,7 +235,11 @@ def decode_batch(
     else:
         raise AttributeError("Only CTC models are supported for now.")
     
-    return [[h.text for h in hyp] for hyp in hyps] if isinstance(hyps, list) else hyps
+    if isinstance(hyps, list) and len(hyps) > 0 and hasattr(hyps[0], "text"):
+        return [h.text for h in hyps]
+    else:
+        return [[h.text for h in hyp] for hyp in hyps]
+
 
 
 def _blank_index(asr_model: EncDecCTCModel) -> int:
