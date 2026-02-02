@@ -189,7 +189,7 @@ def _group_statistics(
     # --------------------------------------------------
     else:
         # Advantage normalized per audio
-        adv = reward - values_old
+        #adv = reward - values_old
         adv = _normalize_adv(adv, indexes, eps=eps)
 
 
@@ -389,6 +389,7 @@ def collect_batch(
         transcriptions = decode_batch(log_probs3d, enc_len, asr_model, use_lm=use_lm, beam_size=beam_size)
 
         greedy_trans = decode_batch(log_probs3d, enc_len, asr_model, use_lm=False, beam_size=1)
+
         greedy_rewards = []
         for i, g_tra in enumerate(greedy_trans):
             g_text = [g_tra[0]]  # single hypo
@@ -404,7 +405,10 @@ def collect_batch(
             reward_model_input = {k: v.to(device) if torch.is_tensor(v) else v for k, v in reward_model_input.items()}
             g_reward = reward_model(**reward_model_input).logits.item()
             greedy_rewards.append(g_reward)
+
         greedy_rewards = torch.tensor(greedy_rewards, device=device)
+
+        greedy_refs = processor.tokenizer.batch_decode(batch["text"], skip_special_tokens=True)
 
         
         for i, tra in enumerate(transcriptions) :
@@ -498,6 +502,8 @@ def collect_batch(
                     for i in torch.unique(indexes)]
     
     wms, cms = _wer_cer(transcriptions, refs, compute=False)
+    wms_greedy, cms_greedy = _wer_cer(greedy_trans, [greedy_refs], compute=False)
+
    
     
     # Return CPU payload only; keep raw text too (tiny memory footprint)
@@ -514,7 +520,9 @@ def collect_batch(
         "indexes" : indexes.cpu(),
         "wers" : wms.cpu(),
         "cers" : cms.cpu(),
-        "greedy" : greedy_rewards.cpu()
+        "greedy" : greedy_rewards.cpu(),
+        "wers_greedy" : wms_greedy.cpu(),
+        "cers_greedy" : cms_greedy.cpu(),
         #
         # reward model text batch is not needed after reward is computed; not stored
     }

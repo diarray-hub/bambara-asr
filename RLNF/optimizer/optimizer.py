@@ -91,7 +91,10 @@ class SCSTOptimizer:
         wers = batch["wers"].to(self.device)
         cers = batch["cers"].to(self.device)
 
-        greedy_rewards = batch["greedy_rewards"].to(self.device)
+        wers_greedy = batch["wers"].to(self.device)
+        cers_greedy = batch["cers"].to(self.device)
+
+        greedy_rewards = batch["greedy"].to(self.device)
 
         self.actor.train()
         self.opt.zero_grad()
@@ -110,8 +113,13 @@ class SCSTOptimizer:
             # Sequence log-prob per hypothesis (CTC)
             seq_logp = _seq_logprob_ctc(log_probs, input_lens, targets, target_lens, self.blank_idx)
 
-            wer_c = _normalize_adv(-wers, indexes)
-            cer_c = _normalize_adv(-cers, indexes)
+           
+
+            baseline_wers = self._compute_baseline(wers, indexes, method=self.baseline, greedy_reward=greedy_rewards)
+            baseline_cers = self._compute_baseline(cers, indexes, method=self.baseline, greedy_rewards=greedy_rewards)
+
+            wer_c = _group_statistics(-wers, baseline_wers,indexes)
+            cer_c = _group_statistics(-cers, baseline_cers,indexes)
 
             #wer_c = wer_c / (wer_c.abs().max(dim=0, keepdim=True)[0] + 1e-8)
             #cer_c = cer_c / (cer_c.abs().max(dim=0, keepdim=True)[0] + 1e-8)
