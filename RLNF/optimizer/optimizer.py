@@ -91,8 +91,8 @@ class SCSTOptimizer:
         wers = batch["wers"].to(self.device)
         cers = batch["cers"].to(self.device)
 
-        #wers_greedy = batch["wers"].to(self.device)
-        #cers_greedy = batch["cers"].to(self.device)
+        wers_greedy = batch["wers_greedy"].to(self.device)
+        cers_greedy = batch["cers_greedy"].to(self.device)
 
         greedy_rewards = batch["greedy"].to(self.device)
 
@@ -115,8 +115,8 @@ class SCSTOptimizer:
 
            
 
-            baseline_wers = self._compute_baseline(wers, indexes, method=self.baseline, greedy_reward=greedy_rewards)
-            baseline_cers = self._compute_baseline(cers, indexes, method=self.baseline, greedy_reward=greedy_rewards)
+            baseline_wers = self._compute_baseline(wers, indexes, method=self.baseline, greedy_reward=wers_greedy)
+            baseline_cers = self._compute_baseline(cers, indexes, method=self.baseline, greedy_reward=cers_greedy)
 
             wer_c = _group_statistics(-wers, baseline_wers,indexes)
             cer_c = _group_statistics(-cers, baseline_cers,indexes)

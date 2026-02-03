@@ -13,6 +13,16 @@ from nemo.collections.asr.metrics.wer import word_error_rate
 
 def _wer_cer(hyps, refs, compute : bool = True):
 
+    if isinstance(refs, list) and len(refs) > 0 and not isinstance(refs[0], list):
+        refs = [[r] for r in refs]
+
+    # Normalisation hyps
+    if isinstance(hyps, list) and len(hyps) > 0 and not isinstance(hyps[0], list):
+        hyps = [[h] for h in hyps]
+
+    # Sécurité minimale
+    assert len(hyps) == len(refs), "hyps et refs n'ont pas la même longueur"
+
     wers = [
         word_error_rate([refs[group_id][j]], [hyps[group_id][j]])
         for group_id in range(len(refs))
@@ -393,8 +403,8 @@ def collect_batch(
         log_probs3d = _ensure_log_softmax(logits_or_logp3d)
 
         greedy_trans = decode_batch(log_probs3d, enc_len, asr_model, use_lm=False)
-        print(greedy_trans)
 
+        
         # Decode to text (for reward model & diagnostics)
         transcriptions = decode_batch(log_probs3d, enc_len, asr_model, use_lm=use_lm, beam_size=beam_size)
 
@@ -419,6 +429,11 @@ def collect_batch(
 
         greedy_refs = processor.tokenizer.batch_decode(batch["text"], skip_special_tokens=True)
 
+        #print(greedy_trans)
+        #print(greedy_refs)
+        #print(greedy_rewards)
+
+        #print(_wer_cer(greedy_trans, greedy_refs, False))
         
         for i, tra in enumerate(transcriptions) :
         
@@ -511,15 +526,10 @@ def collect_batch(
                     for i in torch.unique(indexes)]
     
     wms, cms = _wer_cer(transcriptions, refs, compute=False)
-    try : 
 
-        wms_greedy, cms_greedy = _wer_cer(greedy_trans, [greedy_refs], compute=False)
+    wms_greedy, cms_greedy = _wer_cer(greedy_trans, greedy_refs, compute=False)
 
-    except :
-
-        print(greedy_trans)
-        print(greedy_refs)
-
+   
    
     
     # Return CPU payload only; keep raw text too (tiny memory footprint)
@@ -536,9 +546,9 @@ def collect_batch(
         "indexes" : indexes.cpu(),
         "wers" : wms.cpu(),
         "cers" : cms.cpu(),
-        "greedy" : greedy_rewards.cpu()
-        #"wers_greedy" : wms_greedy.cpu(),
-        #"cers_greedy" : cms_greedy.cpu(),
+        "greedy" : greedy_rewards.cpu(),
+        "wers_greedy" : wms_greedy.cpu(),
+        "cers_greedy" : cms_greedy.cpu(),
         #
         # reward model text batch is not needed after reward is computed; not stored
     }
