@@ -43,6 +43,7 @@ class RLNFTrainerSCST:
         gamma : float = 0.1,
         num_workers: int = 2,
         ent_coeff : float = 0.01,
+        p_lr : float = 1e-3,
         pin_memory: bool = True,
         regularize : bool = False,
         amp: bool = False,
@@ -51,6 +52,7 @@ class RLNFTrainerSCST:
         save_best_mode: str = "min",
         baseline : str = "max",
         use_lm: bool = True,
+        trainable : bool = False,
         beam_size: int = 4,
         resume_from_checkpoint: str | None = None,
         best_external_wer: float = float("inf"),  # Nouveau paramètre
@@ -120,6 +122,8 @@ class RLNFTrainerSCST:
         self.scst = SCSTOptimizer(
             actor=asr_model,
             lr=actor_lr,
+            p_lr=p_lr,
+            trainable=trainable,
             alpha=alpha,
             beta=beta,
             gamma=gamma,
