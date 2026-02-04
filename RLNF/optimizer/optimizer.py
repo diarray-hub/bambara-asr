@@ -195,7 +195,7 @@ class SCSTOptimizer:
             self.scaler.unscale_(self.opt_coeff)
             torch.nn.utils.clip_grad_norm_([self.alpha, self.beta, self.gamma] , 5.0)
 
-            self.scaler.step(self.opt_coeff)
+            #self.scaler.step(self.opt_coeff)
             
 
         self.scaler.step(self.opt)        
