@@ -13,11 +13,13 @@ class SCSTOptimizer:
         self,
         actor: EncDecCTCModel | EncDecCTCModelBPE,
         lr: float = 1e-5,
+        p_lr : float  = 1e-3,
         alpha : float = 1.0,
         beta : float = 0.5,
         gamma : float = 0.2,
         ent_coeff : float = 0.01,
         regularize : bool = False,
+        trainable :  bool =  False,
         baseline: str = "max",  # "max" or "mean" or "greedy"
         device: torch.device = torch.device("cpu"),
         amp: bool = False
@@ -28,13 +30,30 @@ class SCSTOptimizer:
         self.baseline = baseline
         self.blank_idx = _blank_index(actor)
         self.amp = amp
-        self.scaler = torch.cuda.amp.GradScaler(enabled=amp)
-        self.alpha = alpha
-        self.beta = beta
-        self.gamma = gamma
+        self.scaler = torch.amp.GradScaler(enabled=amp)
         self.ent_coeff = ent_coeff
         self.regularize = regularize
+        self.trainable = trainable
 
+        self.opt_coeff = None
+
+        if self.trainable : 
+
+            self.alpha = nn.Parameter(torch.tensor(alpha))   
+            self.beta  = nn.Parameter(torch.tensor(beta))    
+            self.gamma = nn.Parameter(torch.tensor(gamma)) 
+
+            self.opt_coeff = torch.optim.Adam([self.alpha, self.beta, self.gamma], lr=p_lr)
+
+
+        else : 
+
+            self.alpha = alpha
+            self.beta = beta
+            self.gamma = gamma
+
+
+    
     @staticmethod
     def _compute_baseline(reward: torch.Tensor, indexes: torch.Tensor, method: str = "max",
                           greedy_reward : torch.Tensor = None) -> torch.Tensor:
@@ -91,8 +110,8 @@ class SCSTOptimizer:
         wers = batch["wers"].to(self.device)
         cers = batch["cers"].to(self.device)
 
-        wers_greedy = batch["wers_greedy"].to(self.device)
-        cers_greedy = batch["cers_greedy"].to(self.device)
+        #wers_greedy = batch["wers_greedy"].to(self.device)
+        #cers_greedy = batch["cers_greedy"].to(self.device)
 
         greedy_rewards = batch["greedy"].to(self.device)
 
@@ -115,18 +134,30 @@ class SCSTOptimizer:
 
            
 
-            baseline_wers = self._compute_baseline(wers, indexes, method=self.baseline, greedy_reward=wers_greedy)
-            baseline_cers = self._compute_baseline(cers, indexes, method=self.baseline, greedy_reward=cers_greedy)
+            #baseline_wers = self._compute_baseline(wers, indexes, method=self.baseline, greedy_reward=wers_greedy)
+            #baseline_cers = self._compute_baseline(cers, indexes, method=self.baseline, greedy_reward=cers_greedy)
 
-            wer_c = _group_statistics(-wers, baseline_wers,indexes)
-            cer_c = _group_statistics(-cers, baseline_cers,indexes)
+            #wer_c = _group_statistics(-wers, baseline_wers,indexes)
+            #cer_c = _group_statistics(-cers, baseline_cers,indexes)
+
+
+            # update : remplace wer_c / cer_c par
+            wer_norm = _normalize_adv(-wers, indexes)
+            cer_norm = _normalize_adv(-cers, indexes)
+
+            reward_p = (
+                (self.alpha.sigmoid() if self.trainable else self.alpha) * reward +
+                (self.beta.sigmoid() if self.trainable else self.beta) * wer_norm.tanh() +
+                (self.gamma.sigmoid() if self.trainable else self.gamma) * cer_norm.tanh()
+)
 
             #wer_c = wer_c / (wer_c.abs().max(dim=0, keepdim=True)[0] + 1e-8)
             #cer_c = cer_c / (cer_c.abs().max(dim=0, keepdim=True)[0] + 1e-8)
 
-
-            reward_p = self.alpha * reward + self.beta * wer_c.tanh() - self.gamma * cer_c.tanh()
-
+            #if self.trainable : 
+            #    reward_p = self.alpha.sigmoid() * reward + self.beta.sigmoid() * wer_c.tanh() - self.gamma.sigmoid() * cer_c.tanh()
+            #else : 
+            #    reward_p = self.alpha * reward + self.beta * wer_c.tanh() - self.gamma * cer_c.tanh()
 
             # Compute baseline per audio
             baseline_p = self._compute_baseline(reward_p, indexes, self.baseline, greedy_reward=greedy_rewards)
@@ -153,11 +184,23 @@ class SCSTOptimizer:
 
         # Backprop with GradScaler (AMP aware)
         self.scaler.scale(loss).backward()
-        self.scaler.unscale_(self.opt)
-        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
-        self.scaler.step(self.opt)
-        self.scaler.update()
 
+        self.scaler.unscale_(self.opt)
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters() , 1.0)
+
+        if self.trainable and self.opt_coeff is not None: 
+
+            self.opt_coeff.zero_grad()
+
+            self.scaler.unscale_(self.opt_coeff)
+            torch.nn.utils.clip_grad_norm_([self.alpha, self.beta, self.gamma] , 5.0)
+
+            self.scaler.step(self.opt_coeff)
+            
+
+        self.scaler.step(self.opt)        
+        self.scaler.update()
+      
         # Grad-norm diagnostic (sample few params)
         total_grad_norm = 0.0
         cnt = 0
@@ -177,8 +220,6 @@ class SCSTOptimizer:
             "reward_p_mean": float(reward_p.mean().cpu()),
             "baseline_p_mean": float(baseline_p.mean().cpu()),
             "avg_grad_norm": avg_grad_norm,
-            "cos(wers)_mean" : wers.cos().mean().cpu(),
-            "sin(cers)_mean" : cers.sin().mean().cpu(),
-            "cer_c_mean" : cer_c.tanh().mean().cpu(),
-            "wer_c_mean" : wer_c.tanh().mean().cpu()
+            "cer_c_mean" : float(cer_norm.tanh().mean().cpu()),
+            "wer_c_mean" : float(wer_norm.tanh().mean().cpu())
         }

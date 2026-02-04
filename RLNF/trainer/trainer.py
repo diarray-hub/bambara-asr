@@ -53,6 +53,7 @@ class RLNFTrainerSCST:
         use_lm: bool = True,
         beam_size: int = 4,
         resume_from_checkpoint: str | None = None,
+        best_external_wer: float = float("inf"),  # Nouveau paramètre
     ):
         # ================= DDP =================
         self.is_distributed = dist.is_available() and dist.is_initialized()
@@ -79,6 +80,10 @@ class RLNFTrainerSCST:
         self.save_best_mode = save_best_mode
         self.best_val = float("inf") if save_best_mode == "min" else -float("inf")
         self.best_scst_loss = float("inf")
+
+        # Initialisation avec WER externe
+        if best_external_wer != float("inf"):
+            self.best_val = best_external_wer
 
         # ================= LOGGING =================
         self.tb_writer = SummaryWriter(f"tb_logs/{run_name}") if self.is_main else None
@@ -336,18 +341,39 @@ class RLNFTrainerSCST:
             "best_val": self.best_val,
             "best_scst_loss": self.best_scst_loss,
         }
+        if self.scst.trainable:
+            ckpt.update({
+                "alpha": self.scst.alpha.detach().cpu(),
+                "beta": self.scst.beta.detach().cpu(),
+                "gamma": self.scst.gamma.detach().cpu(),
+                "opt_coeff": self.scst.opt_coeff.state_dict() if self.scst.opt_coeff else None,
+            })
         path = os.path.join(self.save_dir, f"checkpoint_step{step}.pt")
         torch.save(ckpt, path)
 
     def load_checkpoint(self, path: str):
+
         map_location = {"cuda:%d" % 0: "cuda:%d" % self.rank} if self.is_distributed else self.device
         ckpt = torch.load(path, map_location=map_location)
+
         actor = self.scst.actor.module if self.is_distributed else self.scst.actor
         actor.load_state_dict(ckpt["actor"])
+
         self.current_epoch = ckpt.get("epoch", 0)
         self.global_step = ckpt.get("global_step", 0)
         self.best_val = ckpt.get("best_val", self.best_val)
         self.best_scst_loss = ckpt.get("best_scst_loss", self.best_scst_loss)
+
+        if self.scst.trainable and "alpha" in ckpt:
+
+            self.scst.alpha.data = ckpt["alpha"].to(self.device)
+            self.scst.beta.data = ckpt["beta"].to(self.device)
+            self.scst.gamma.data = ckpt["gamma"].to(self.device)
+
+            if self.scst.opt_coeff and ckpt.get("opt_coeff"):
+
+                self.scst.opt_coeff.load_state_dict(ckpt["opt_coeff"])
+
         if self.is_main:
             print(f"[checkpoint] resumed from {path} | epoch={self.current_epoch}, step={self.global_step}")
 
@@ -358,8 +384,4 @@ class RLNFTrainerSCST:
             actor.save_to(path)
         except Exception as e:
             torch.save(actor.state_dict(), path.replace(".nemo", ".pt"))
-
-    # =====================================================
-    # WER/CER
-    # =====================================================
     
