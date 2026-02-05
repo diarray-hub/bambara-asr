@@ -221,7 +221,7 @@ def decode_batch(
         raise AttributeError("Only CTC models are supported for now.")
     
     if isinstance(hyps, list) and len(hyps) > 0 and hasattr(hyps[0], "text"):
-        return [h.text for h in hyps]
+        return [[h.text] for h in hyps]
     else:
         return [[h.text for h in hyp] for hyp in hyps]
     
