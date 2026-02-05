@@ -351,6 +351,9 @@ class RLNFTrainer:
                 rewards.append(batch_reward)
                 values.append(batch_value)
 
+                print(f"wers :{wers}")
+                print(f"cers : {cers}")
+
 
              # =======================
             # Aggregate metrics
