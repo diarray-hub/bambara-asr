@@ -355,6 +355,8 @@ class RLNFTrainer:
                 print(f"cers : {cers}")
 
                 print(f"sum[wers] :  {sum(wers)}")
+                print(f"text : {val_dict["texts"]}")
+                print(f"Ref : {refs}")
 
 
              # =======================
