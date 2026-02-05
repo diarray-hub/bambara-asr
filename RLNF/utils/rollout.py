@@ -175,7 +175,7 @@ def ppo_group_statistics(
 
         # Critic target = mean reward per audio
         rewards_means, _, _ = _mean_mean(reward, indexes, only=False)
-        critic_target = reward #rewards_means[indexes]
+        critic_target = rewards_means[indexes]
 
         mode = 1 #"grouped_by_audio"
 

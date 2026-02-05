@@ -47,8 +47,6 @@ class RLNFTrainer:
         critic_lr: float = 1e-4,
         clip_eps: float = 0.2,
         val_every: int = 200,
-        target_kl : float = 0.01,
-        kl_coef : float = 0.01,
         num_workers: int = 2,
         pin_memory: bool = True,
         amp: bool = False,
@@ -135,8 +133,6 @@ class RLNFTrainer:
             actor_lr=actor_lr,
             critic_lr=critic_lr,
             K_updates=K_updates,
-            kl_coef=kl_coef,
-            target_kl = target_kl,
             device=device,
             amp=amp,
         )
