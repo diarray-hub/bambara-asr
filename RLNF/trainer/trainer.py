@@ -352,69 +352,50 @@ class RLNFTrainer:
                 values.append(batch_value)
 
 
-                string = f"""WER :{sum(wers)/len(wers):.4f}, 
-                        CER: {sum(cers)/len(cers):.4f},
-                        Reward: {sum(rewards)/len(rewards):.3f},
-                        Value: {sum(values)/len(values):.3f}"""
-                        
-                pbar_val.set_postfix_str(string)
-                print(string)
+             # =======================
+            # Aggregate metrics
+            # =======================
+            mean_wer = sum(wers) / len(wers)
+            mean_cer = sum(cers) / len(cers)
+            mean_reward = sum(rewards) / len(rewards)
 
-            # affichage live par batch
-            if self.is_main:
-                
-                string = f"""WER :{sum(wers)/len(wers):.4f}, 
-                        CER: {sum(cers)/len(cers):.4f},
-                        Reward: {sum(rewards)/len(rewards):.3f},
-                        Value: {sum(values)/len(values):.3f}"""
-                        
-                pbar_val.set_postfix_str(string)
-                
-                pbar_val.set_postfix({
-                    "WER": f"{sum(wers)/len(wers):.4f}",
-                    "CER": f"{sum(cers)/len(cers):.4f}",
-                    "Reward": f"{sum(rewards)/len(rewards):.3f}",
-                    "Value": f"{sum(values)/len(values):.3f}",
-                })
-                
-                
+            # ---- WandB logging ----
+            if self._use_wandb:
 
-            # ===== reduce metrics across GPUs =====
-            t = torch.tensor([
-                sum(wers),
-                sum(cers),
-                sum([r.item() for r in rewards]),
-                sum([v.item() for v in values]),
-                len(wers)
-            ], device=self.device)
+                wandb.log({
+                    "val/wer": mean_wer,
+                    "val/cer": mean_cer,
+                    "val/reward": mean_reward,
+                    "val/best_wer": self.best_val,
+                }, step=step)
 
-            if self.is_distributed:
-                dist.all_reduce(t, op=dist.ReduceOp.SUM)
+            # =======================
+            # Save if WER improved
+            # =======================
+            improved = (
+                (self.save_best_mode == "min" and mean_wer < self.best_val)
+                or
+                (self.save_best_mode == "max" and mean_wer > self.best_val)
+            )
 
-            total = t[-1].item()
-            to_log = {
-                "val/wer": (t[0]/total).item(),
-                "val/cer": (t[1]/total).item(),
-                "val/reward": (t[2]/total).item(),
-                "val/value": (t[3]/total).item(),
-            }
+            if improved:
+                if self.is_main:
+                    old = self.best_val
+                    self.best_val = mean_wer
+                    
+                    # Save checkpoint + actor
+                    self.save_best(step)
 
-            if end_of_epoch:
-                to_log["epoch"] = self.current_epoch
-
-            cur = to_log[self.save_best_by]
-            if (
-                (self.save_best_mode == "min" and cur < self.best_val)
-                or (self.save_best_mode == "max" and cur > self.best_val)
-            ):
-                self.best_val = cur
-                self.save_best(step)
-
-            if self.is_main:
-                if self._use_wandb:
-                    wandb.log(to_log, step=step)
-                for k, v in to_log.items():
-                    self.tb_writer.add_scalar(k, v, step)
+                    if self._use_wandb:
+                        wandb.log({
+                            "val/wer_improved": 1,
+                            "val/wer_delta": old - mean_wer,
+                        }, step=step)
+            else:
+                if self.is_main and self._use_wandb:
+                    wandb.log({
+                        "val/wer_improved": 0,
+                    }, step=step)
                     
         actor.train()
         critic.train()
