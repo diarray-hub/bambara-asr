@@ -354,6 +354,8 @@ class RLNFTrainer:
                 print(f"wers :{wers}")
                 print(f"cers : {cers}")
 
+                print(f"sum[wers] :  {sum(wers)}")
+
 
              # =======================
             # Aggregate metrics
