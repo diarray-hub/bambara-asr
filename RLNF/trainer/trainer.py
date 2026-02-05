@@ -358,10 +358,12 @@ class RLNFTrainer:
                 #print(f"text : {val_dict["texts"]}")
                 #print(f"Ref : {refs}")
 
-            for i, ele in enumerate(wers):
-                if torch.isinf(ele).item():
-                    print(refs[i])
-                    print(val_dict["texts"][i])
+                for i, ele in enumerate(wers):
+                    if torch.isinf(ele).item():
+                        print(refs[i])
+                        print(val_dict["texts"][i])
+                        break
+                        
 
              # =======================
             # Aggregate metrics
