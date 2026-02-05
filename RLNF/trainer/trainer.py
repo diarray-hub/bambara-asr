@@ -365,14 +365,14 @@ class RLNFTrainer:
             mean_reward = sum(rewards) / len(rewards)
 
             # ---- WandB logging ----
-            if self._use_wandb:
+           
 
-                wandb.log({
-                    "val/wer": mean_wer,
-                    "val/cer": mean_cer,
-                    "val/reward": mean_reward,
-                    "val/best_wer": self.best_val,
-                }, step=step)
+            wandb.log({
+                "val/wer": float(mean_wer),
+                "val/cer": float(mean_cer),
+                "val/reward": mean_reward,
+                "val/best_wer": self.best_val,
+            }, step=step)
 
             # =======================
             # Save if WER improved
