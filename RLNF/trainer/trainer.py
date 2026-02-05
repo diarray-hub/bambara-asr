@@ -522,7 +522,7 @@ class RLNFTrainer:
         except Exception as e:
             torch.save(actor.state_dict(), path.replace(".nemo", ".pt"))
 
-    def _wer_cer(self, hyps, refs, indexes) :
+   """ def _wer_cer(self, hyps, refs, indexes) :
         
         wers = [
             word_error_rate([refs[group_id][j]], [hyps[group_id][j]])
@@ -543,3 +543,30 @@ class RLNFTrainer:
         cms = (tcs.mean() if _same_num_hypotheses(indexes=indexes) else _mean_mean(tcs, indexes)[0])
         
         return wms, cms
+    """
+    def _wer_cer(self, hyps, refs, indexes):
+        wers = []
+        cers = []
+
+        for group_id in range(len(refs)):
+            for j in range(len(refs[group_id])):
+                ref = refs[group_id][j].strip()
+                hyp = hyps[group_id][j].strip()
+
+                if len(ref) == 0:
+                    print("⚠️ REF VIDE DETECTÉE")
+                    print("ref:", repr(ref))
+                    print("hyp:", repr(hyp))
+                    continue
+
+                wers.append(word_error_rate([ref], [hyp]))
+                cers.append(word_error_rate([ref], [hyp], use_cer=True))
+
+        tws = torch.tensor(wers)
+        tcs = torch.tensor(cers)
+
+        wms = tws.mean() if _same_num_hypotheses(indexes) else _mean_mean(tws, indexes)[0]
+        cms = tcs.mean() if _same_num_hypotheses(indexes) else _mean_mean(tcs, indexes)[0]
+
+        return wms, cms
+
