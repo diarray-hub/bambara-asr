@@ -352,12 +352,13 @@ class RLNFTrainer:
                 values.append(batch_value)
 
 
-            string = f"""WER :{sum(wers)/len(wers):.4f}, 
+                string = f"""WER :{sum(wers)/len(wers):.4f}, 
                         CER: {sum(cers)/len(cers):.4f},
                         Reward: {sum(rewards)/len(rewards):.3f},
                         Value: {sum(values)/len(values):.3f}"""
                         
-            pbar_val.set_postfix_str(string)
+                pbar_val.set_postfix_str(string)
+                print(string)
 
             # affichage live par batch
             if self.is_main:
