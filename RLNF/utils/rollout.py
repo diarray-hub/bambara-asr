@@ -24,12 +24,12 @@ def _wer_cer(hyps, refs, compute : bool = True):
     assert len(hyps) == len(refs), "hyps et refs n'ont pas la même longueur"
 
     wers = [
-        word_error_rate([refs[group_id][j]], [hyps[group_id][j]])
+        word_error_rate([hyps[group_id][j]], [refs[group_id][j]])
         for group_id in range(len(refs))
         for j in range(len(refs[group_id]))
     ]
     cers = [
-        word_error_rate([refs[group_id][j]], [hyps[group_id][j]], use_cer=True)
+        word_error_rate([hyps[group_id][j]], [refs[group_id][j]], use_cer=True)
         for group_id in range(len(refs))
         for j in range(len(refs[group_id]))
     ]
@@ -246,7 +246,7 @@ def decode_batch(
         raise AttributeError("Only CTC models are supported for now.")
     
     if isinstance(hyps, list) and len(hyps) > 0 and hasattr(hyps[0], "text"):
-        return [[h.text] for h in hyps]
+        return [h.text for h in hyps]
     else:
         return [[h.text for h in hyp] for hyp in hyps]
 
