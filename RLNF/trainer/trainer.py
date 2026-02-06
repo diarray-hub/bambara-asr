@@ -350,19 +350,11 @@ class RLNFTrainer:
                 
                 rewards.append(batch_reward)
                 values.append(batch_value)
-                
-                print(f"wers :{wers}")
-                print(f"cers : {cers}")
 
                 #print(f"sum[wers] :  {sum(wers)}")
                 #print(f"text : {val_dict["texts"]}")
                 #print(f"Ref : {refs}")
 
-                for i, ele in enumerate(wers):
-                    if torch.isinf(ele).item():
-                        print(refs[i])
-                        print(val_dict["texts"][i])
-                        break
                         
 
              # =======================
