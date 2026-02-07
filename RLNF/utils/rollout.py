@@ -171,11 +171,11 @@ def ppo_group_statistics(
     else:
         # Advantage normalized per audio
         adv = reward - values_old
-        adv = _normalize_adv(adv, indexes, eps=eps)
+        #adv = _normalize_adv(adv, indexes, eps=eps)
 
         # Critic target = mean reward per audio
-        rewards_means, _, _ = _mean_mean(reward, indexes, only=False)
-        critic_target = rewards_means[indexes]
+        #rewards_means, _, _ = _mean_mean(reward, indexes, only=False)
+        critic_target = reward #rewards_means[indexes]
 
         mode = 1 #"grouped_by_audio"
 
