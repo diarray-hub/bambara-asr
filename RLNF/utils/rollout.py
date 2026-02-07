@@ -160,7 +160,7 @@ def ppo_group_statistics(
     if same_hypo:
         # Classic PPO
         adv = reward - values_old
-        adv = (adv - adv.mean()) / (adv.std(unbiased=False) + eps)
+        #adv = (adv - adv.mean()) / (adv.std(unbiased=False) + eps)
 
         critic_target = reward
         mode = 0 #"flat_hypotheses"
