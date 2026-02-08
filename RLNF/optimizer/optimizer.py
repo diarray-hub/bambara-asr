@@ -20,6 +20,7 @@ class SCSTOptimizer:
         ent_coeff : float = 0.01,
         regularize : bool = False,
         trainable :  bool =  False,
+        only : bool = False,
         baseline: str = "max",  # "max" or "mean" or "greedy"
         device: torch.device = torch.device("cpu"),
         amp: bool = False
@@ -34,6 +35,7 @@ class SCSTOptimizer:
         self.ent_coeff = ent_coeff
         self.regularize = regularize
         self.trainable = trainable
+        self.only = only
 
         self.opt_coeff = None
 
@@ -145,19 +147,17 @@ class SCSTOptimizer:
             wer_norm = _normalize_adv(-wers, indexes)
             cer_norm = _normalize_adv(-cers, indexes)
 
-            reward_p = (
-                (self.alpha.sigmoid() if self.trainable else self.alpha) * reward +
-                (self.beta.sigmoid() if self.trainable else self.beta) * wer_norm.tanh() +
-                (self.gamma.sigmoid() if self.trainable else self.gamma) * cer_norm.tanh()
+            if self.only : 
+
+                reward_p = reward #- (wer_norm + cer_norm)
+
+            else : 
+
+                reward_p = (
+                    (self.alpha.sigmoid() if self.trainable else self.alpha) * reward +
+                    (self.beta.sigmoid() if self.trainable else self.beta) * wer_norm.tanh() +
+                    (self.gamma.sigmoid() if self.trainable else self.gamma) * cer_norm.tanh()
 )
-
-            #wer_c = wer_c / (wer_c.abs().max(dim=0, keepdim=True)[0] + 1e-8)
-            #cer_c = cer_c / (cer_c.abs().max(dim=0, keepdim=True)[0] + 1e-8)
-
-            #if self.trainable : 
-            #    reward_p = self.alpha.sigmoid() * reward + self.beta.sigmoid() * wer_c.tanh() - self.gamma.sigmoid() * cer_c.tanh()
-            #else : 
-            #    reward_p = self.alpha * reward + self.beta * wer_c.tanh() - self.gamma * cer_c.tanh()
 
             # Compute baseline per audio
             baseline_p = self._compute_baseline(reward_p, indexes, self.baseline, greedy_reward=greedy_rewards)
@@ -220,6 +220,6 @@ class SCSTOptimizer:
             "reward_p_mean": float(reward_p.mean().cpu()),
             "baseline_p_mean": float(baseline_p.mean().cpu()),
             "avg_grad_norm": avg_grad_norm,
-            "cer_c_mean" : float(cer_norm.tanh().mean().cpu()),
-            "wer_c_mean" : float(wer_norm.tanh().mean().cpu())
+            "cer_tanh_mean" : float(cer_norm.tanh().mean().cpu()),
+            "wer_tanh_mean" : float(wer_norm.tanh().mean().cpu())
         }

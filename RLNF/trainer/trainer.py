@@ -45,6 +45,7 @@ class RLNFTrainerSCST:
         ent_coeff : float = 0.01,
         p_lr : float = 1e-3,
         pin_memory: bool = True,
+        only : bool = False,
         regularize : bool = False,
         amp: bool = False,
         save_dir: str = "checkpoints",
@@ -131,6 +132,7 @@ class RLNFTrainerSCST:
             ent_coeff=ent_coeff,
             regularize=regularize,
             device=device,
+            only=only,
             amp=amp
         )
 
