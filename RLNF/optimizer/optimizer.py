@@ -163,7 +163,9 @@ class SCSTOptimizer:
             baseline_p = self._compute_baseline(reward_p, indexes, self.baseline, greedy_reward=greedy_rewards)
             
             # Advantage = reward - baseline
-            advantage = _group_statistics(reward=reward_p, values_old=baseline_p, indexes=indexes)
+            #advantage = _group_statistics(reward=reward_p, values_old=baseline_p, indexes=indexes)
+
+            advantage = reward_p - baseline_p
 
             # Diagnostics BEFORE detach
             adv_mean = advantage.mean().item()
