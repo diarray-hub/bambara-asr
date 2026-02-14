@@ -197,7 +197,7 @@ def collect_batch(
 
     greedy_trans = decode_batch(log_probs3d, enc_len, asr_model, use_lm=False) 
 
-    if use_lm :
+    if not use_lm :
 
         return {"greedy_trans" :  greedy_trans}
    
