@@ -263,7 +263,7 @@ def collect_batch(
         FINAL_TARGETS.append(tgt_pad[best].unsqueeze(0))
         FINAL_TARGET_LENS.append(tgt_lens[best].unsqueeze(0))
         FINAL_LENS.append(len_i[best].unsqueeze(0))
-        
+
         FINAL_SAMPLE_WEIGHT.append(weights[best])
 
         Lmax = max(t.size(1) for t in FINAL_TARGETS)
@@ -273,14 +273,14 @@ def collect_batch(
         ]
 
     return {
-            "audio": torch.cat(FINAL_AUDIO).cpu(),
-            "audio_len": torch.cat(FINAL_AUDIO_LENS).cpu(),
-            "targets": torch.cat(TARGETS_padded).cpu(),
-            "target_lengths": torch.cat(FINAL_TARGET_LENS).cpu(),
-            "input_lenght" : torch.cat(FINAL_LENS).cpu(),
-            "score" : torch.stack(SCORES).cpu(),
-            "greedy_trans" : greedy_trans,
-            "sample_weight" : torch.stack(FINAL_SAMPLE_WEIGHT).cpu()
+        "audio": torch.cat(FINAL_AUDIO).cpu(),
+        "audio_len": torch.cat(FINAL_AUDIO_LENS).cpu(),
+        "targets": torch.cat(TARGETS_padded).cpu(),
+        "target_lengths": torch.cat(FINAL_TARGET_LENS).cpu(),
+        "input_lenght" : torch.cat(FINAL_LENS).cpu(),
+        "score" : torch.stack(SCORES).cpu(),
+        "greedy_trans" : greedy_trans,
+        "sample_weight" : torch.stack(FINAL_SAMPLE_WEIGHT).cpu()
     }
         
 

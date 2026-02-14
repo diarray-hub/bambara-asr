@@ -31,6 +31,7 @@ class DistillationOptimizer:
             - targets: [B, Lmax]
             - target_lengths: [B]
         """
+        
         audio = batch["audio"].to(self.device)
         audio_lens = batch["audio_len"].to(self.device)
         targets = batch["targets"].to(self.device)
