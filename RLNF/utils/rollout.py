@@ -168,6 +168,7 @@ def collect_batch(
     beam_size : int = 4,
     alpha  = 1.0,
     beta = 0.3,
+    temperature : float = 1.0
 ) -> Dict[str, torch.Tensor | List[str]]:
    
     
@@ -196,20 +197,29 @@ def collect_batch(
 
     greedy_trans = decode_batch(log_probs3d, enc_len, asr_model, use_lm=False) 
 
+    if use_lm :
+
+        return {"greedy_trans" :  greedy_trans}
    
 
-    transcriptions = decode_batch(log_probs3d, enc_len, asr_model, use_lm=use_lm, beam_size=beam_size)
+    transcriptions = decode_batch(log_probs3d, enc_len, asr_model, use_lm=use_lm,beam_size=beam_size)
     
     FINAL_AUDIO = []
     FINAL_AUDIO_LENS = []
     FINAL_TARGETS = []
     FINAL_TARGET_LENS = []
-        
-        
+    FINAL_LENS = []
+    SCORES = []
+    FINAL_SAMPLE_WEIGHT = []
+
     for i, tra in enumerate(transcriptions) :
     
         tran = processor.tokenizer.batch_encode_plus(tra, return_attention_mask=True, padding=True, return_tensors="pt")
         
+        tgt_lists, tgt_lens_list = _encode_texts_for_ctc(asr_model, tra)
+        tgt_tensors = [torch.tensor(x, dtype=torch.long) for x in tgt_lists]
+        tgt_pad = pad_sequence(tgt_tensors, batch_first=True, padding_value=0).to(device=device)  # [B, Lmax]
+        tgt_lens = torch.tensor(tgt_lens_list, dtype=torch.long, device=device)  
 
         audio_i = audios[i].unsqueeze(0).repeat(len(tra), 1, 1)              # [T, F]
         audio_len = audio_lens[i].expand(len(tra))
@@ -226,16 +236,9 @@ def collect_batch(
         reward_model_input = {k: v.to(device) if torch.is_tensor(v) else v for k, v in reward_model_input.items()}
 
         rewards = reward_model(**reward_model_input).logits
-        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
+        rewards = (rewards - rewards.mean()) #/ (rewards.std() + 1e-8)
         
-        tgt_ids, tgt_lens = _encode_texts_for_ctc(asr_model, tra)
-        tgt_pad = pad_sequence(
-            [torch.tensor(x) for x in tgt_ids],
-            batch_first=True,
-            padding_value=0
-        ).to(device)
-
-        tgt_lens = torch.tensor(tgt_lens, device=device)
+    
         logp_i = log_probs3d[i].unsqueeze(0).repeat(len(tra), 1, 1)
         len_i = enc_len[i].expand(len(tra))
 
@@ -245,23 +248,39 @@ def collect_batch(
             tgt_pad,
             tgt_lens,
             _blank_index(asr_model)
-        )
+        ).detach()
 
         scores = alpha * logp_ctc + beta * rewards
+
+        weights = torch.softmax(scores / temperature, dim=0).detach()
+
         best = scores.argmax().item()
+
+        SCORES.append(scores.mean())
 
         FINAL_AUDIO.append(audios[i].unsqueeze(0))
         FINAL_AUDIO_LENS.append(audio_lens[i].unsqueeze(0))
         FINAL_TARGETS.append(tgt_pad[best].unsqueeze(0))
         FINAL_TARGET_LENS.append(tgt_lens[best].unsqueeze(0))
+        FINAL_LENS.append(len_i[best].unsqueeze(0))
+        
+        FINAL_SAMPLE_WEIGHT.append(weights[best])
 
-        return {
+        Lmax = max(t.size(1) for t in FINAL_TARGETS)
+
+        TARGETS_padded = [
+            F.pad(t, (0, Lmax - t.size(1))) for t in FINAL_TARGETS
+        ]
+
+    return {
             "audio": torch.cat(FINAL_AUDIO).cpu(),
             "audio_len": torch.cat(FINAL_AUDIO_LENS).cpu(),
-            "targets": torch.cat(FINAL_TARGETS).cpu(),
+            "targets": torch.cat(TARGETS_padded).cpu(),
             "target_lengths": torch.cat(FINAL_TARGET_LENS).cpu(),
-            "score" : scores,
+            "input_lenght" : torch.cat(FINAL_LENS).cpu(),
+            "score" : torch.stack(SCORES).cpu(),
             "greedy_trans" : greedy_trans,
-        }
+            "sample_weight" : torch.stack(FINAL_SAMPLE_WEIGHT).cpu()
+    }
         
 

@@ -10,7 +10,7 @@ import wandb
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 
-from RLNF.utils.rollout import collect_batch
+from ..utils.rollout import collect_batch, decode_batch
 from ..dataloaders.reward_dataset import RewardDataCollator
 from ..Rewards.reward_processor import RewardModelProcessor
 from ..Rewards.reward_model import RewardModel
@@ -157,9 +157,9 @@ class RLNFTrainerDistill:
 
                     if self.is_main:
                         loss = stats["distill_loss"]
-                        #if loss < self.best_val:
-                        #    self.best_val = loss
-                        #    self.save_student_best(global_step, loss)
+                        if loss < self.best_val:
+                            self.best_val = loss
+                            self.save_student_best(global_step, loss)
 
                         if self._use_wandb:
                             wandb.log({f"train/{k}": v for k, v in stats.items()}, step=global_step)
@@ -194,52 +194,60 @@ class RLNFTrainerDistill:
         student = self.optimizer.student.module if self.is_distributed else self.optimizer.student
         student.eval()
 
-        losses = []
         wers = []
         cers = []
 
         with torch.no_grad():
-            pbar_val = tqdm(self.val_loader, leave=False, disable=not self.is_main, desc=f"Validation at step {step}")
+            pbar_val = tqdm(
+                self.val_loader,
+                leave=False,
+                disable=not self.is_main,
+                desc=f"Validation at step {step}"
+            )
+
             for batch in pbar_val:
-                val_dict = collect_batch(
-                    batch=batch,
+                audio = batch["audio"].to(self.device)
+                audio_len = batch["audio_len"].to(self.device)
+
+                # === Forward student ===
+                out = student(processed_signal=audio, processed_signal_length=audio_len)
+                logits, enc_len = out[0], out[1]
+
+                log_probs = logits.log_softmax(dim=-1)
+
+                # === Greedy decoding ONLY ===
+                preds = decode_batch(
+                    log_probs=log_probs,
+                    enc_len=enc_len,
                     asr_model=student,
-                    reward_model=self.teacher_model,
-                    processor=self.processor,
-                    device=self.device,
-                    use_lm=False,
-                    alpha=self.alpha,
-                    beta=self.beta
+                    use_lm=False
                 )
 
-                stats_val = self.optimizer.update(val_dict)
-                losses.append(stats_val["distill_loss"])
-                wers.append(word_error_rate(val_dict["greedy_text"], batch["text"]))
-                cers.append(word_error_rate(val_dict["greedy_text"], batch["text"], use_cer=True))
+                # === References ===
+                refs = self.processor.tokenizer.batch_decode(
+                    batch["text"],
+                    skip_special_tokens=True
+                )
 
+                wers.append(word_error_rate(preds, refs))
+                cers.append(word_error_rate(preds, refs, use_cer=True))
 
-        mean_loss = sum(losses) / len(losses)
         mean_wer = sum(wers) / len(wers)
         mean_cer = sum(cers) / len(cers)
 
         if self.is_main:
             if self._use_wandb:
-                wandb.log({"val/distill_loss": mean_loss,
-                           "val/wer" : mean_wer ,
-                           "val/cer" : mean_cer}, step=step)
+                wandb.log({
+                    "val/wer": mean_wer,
+                    "val/cer": mean_cer
+                }, step=step)
 
-            improved = self.save_best_mode == "min" and mean_loss < self.best_val
-            improved_wer = self.save_best_mode == "min" and mean_wer < self.best_wer
-            
-            if improved_wer:
+            if mean_wer < self.best_wer:
                 self.best_wer = mean_wer
                 self.save_student_best_wer(step, mean_wer)
 
-            if improved:
-                self.best_val = mean_loss
-                self.save_student_best(step, mean_loss)
-
         student.train()
+
 
     # =====================================================
     # SAVE / LOAD

@@ -35,7 +35,10 @@ class DistillationOptimizer:
         audio_lens = batch["audio_len"].to(self.device)
         targets = batch["targets"].to(self.device)
         target_lens = batch["target_lengths"].to(self.device)
+        input_lenght = batch["input_lenght"].to(self.device)
         scores = batch["score"]
+        sample_weight = batch["sample_weight"].to(self.device)  # [B]
+
 
         self.student.train()
         self.opt.zero_grad()
@@ -53,14 +56,14 @@ class DistillationOptimizer:
             # Sequence log-prob per sample
             seq_logp = _seq_logprob_ctc(
                 log_probs_btv=log_probs,
-                input_lengths_b=audio_lens,
+                input_lengths_b=input_lenght,
                 targets_padded_bl=targets,
                 target_lengths_b=target_lens,
                 blank_idx=self.blank_idx
             )
 
             # Maximize log-prob => minimize negative log-prob
-            loss = -seq_logp.mean()
+            loss = -(sample_weight * seq_logp).mean()
 
         # Backprop with GradScaler
         self.scaler.scale(loss).backward()
