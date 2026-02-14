@@ -42,6 +42,7 @@ class RLNFTrainerDistill:
         num_workers: int = 2,
         alpha : float = 1.0,
         beta : float = 0.3 ,
+        temperature : float = 1.0,
         amp: bool = False,
         save_dir: str = "checkpoints",
         save_best_by: str = "val/loss",
@@ -67,6 +68,7 @@ class RLNFTrainerDistill:
         self.global_step = 0
         self.alpha = alpha
         self.beta = beta
+        self.temperature = temperature
 
         # ================= SAVE =================
         self.save_dir = save_dir
@@ -149,7 +151,8 @@ class RLNFTrainerDistill:
                         use_lm=True,
                         beam_size=self.beam_size,
                         alpha=self.alpha,
-                        beta=self.beta
+                        beta=self.beta,
+                        temperature=self.temperature
                     )
 
                     # === Distillation update ===
@@ -192,6 +195,16 @@ class RLNFTrainerDistill:
     # =====================================================
     def validate(self, step: int, end_of_epoch: bool = False):
         student = self.optimizer.student.module if self.is_distributed else self.optimizer.student
+       
+
+        if student.cfg.decoding.strategy == "pyctcdecode" :
+
+            decoding_cfg = student.cfg.decoding
+            decoding_cfg.strategy = "greedy_batch"
+            decoding_cfg.beam.return_best_hypothesis = True
+
+            student.change_decoding_strategy(decoding_cfg)
+            
         student.eval()
 
         wers = []
