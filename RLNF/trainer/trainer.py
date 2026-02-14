@@ -155,6 +155,8 @@ class RLNFTrainerDistill:
                         temperature=self.temperature
                     )
 
+                    print(batch_dict)
+
                     # === Distillation update ===
                     stats = self.optimizer.update(batch_dict)
 
@@ -204,7 +206,7 @@ class RLNFTrainerDistill:
             decoding_cfg.beam.return_best_hypothesis = True
 
             student.change_decoding_strategy(decoding_cfg)
-            
+
         student.eval()
 
         wers = []
