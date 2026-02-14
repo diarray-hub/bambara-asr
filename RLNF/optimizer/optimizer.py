@@ -2,226 +2,76 @@ import torch
 import torch.nn as nn
 from nemo.collections.asr.models import EncDecCTCModel, EncDecCTCModelBPE
 from typing import Dict
-from ..utils.rollout import _seq_logprob_ctc, _blank_index, _ensure_log_softmax, _normalize_adv, _group_statistics
+from ..utils.rollout import _seq_logprob_ctc, _blank_index, _ensure_log_softmax
 
-class SCSTOptimizer:
+class DistillationOptimizer:
     """
-    Self-Critical Sequence Training (SCST) for ASR with CTC.
-    Handles multiple hypotheses per audio and baseline computation (max or mean).
+    Simple CTC distillation: maximize log-prob of teacher targets.
     """
     def __init__(
         self,
-        actor: EncDecCTCModel | EncDecCTCModelBPE,
+        student: EncDecCTCModel | EncDecCTCModelBPE,
         lr: float = 1e-5,
-        p_lr : float  = 1e-3,
-        alpha : float = 1.0,
-        beta : float = 0.5,
-        gamma : float = 0.2,
-        ent_coeff : float = 0.01,
-        regularize : bool = False,
-        trainable :  bool =  False,
-        only : bool = False,
-        baseline: str = "max",  # "max" or "mean" or "greedy"
         device: torch.device = torch.device("cpu"),
         amp: bool = False
     ):
-        self.actor = actor.to(device)
+        self.student = student.to(device)
         self.device = device
-        self.opt = torch.optim.Adam(self.actor.parameters(), lr=lr)
-        self.baseline = baseline
-        self.blank_idx = _blank_index(actor)
+        self.opt = torch.optim.Adam(self.student.parameters(), lr=lr)
+        self.blank_idx = _blank_index(student)
         self.amp = amp
         self.scaler = torch.amp.GradScaler(enabled=amp)
-        self.ent_coeff = ent_coeff
-        self.regularize = regularize
-        self.trainable = trainable
-        self.only = only
-
-        self.opt_coeff = None
-
-        if self.trainable : 
-
-            self.alpha = nn.Parameter(torch.tensor(alpha))   
-            self.beta  = nn.Parameter(torch.tensor(beta))    
-            self.gamma = nn.Parameter(torch.tensor(gamma)) 
-
-            self.opt_coeff = torch.optim.Adam([self.alpha, self.beta, self.gamma], lr=p_lr)
-
-
-        else : 
-
-            self.alpha = alpha
-            self.beta = beta
-            self.gamma = gamma
-
-
-    
-    @staticmethod
-    def _compute_baseline(reward: torch.Tensor, indexes: torch.Tensor, method: str = "max",
-                          greedy_reward : torch.Tensor = None) -> torch.Tensor:
-        """
-        Compute baseline per audio.
-        """
-
-        baseline = torch.zeros_like(reward)
-
-        if method == "greedy" :
-
-            if greedy_reward is None or len(greedy_reward) != len(indexes.unique()) : 
-                raise ValueError("greedy_rewards required for method='greedy'")
-            
-            for i, uid in enumerate(indexes.unique()) : 
-                mask = indexes == uid
-                baseline[mask] = greedy_reward[i]
-
-        else : 
-
-            for uid in indexes.unique():
-                mask = indexes == uid
-                if method == "max":
-                    baseline[mask] = reward[mask].max()
-                elif method == "mean":
-                    baseline[mask] = reward[mask].mean()
-                else:
-                    raise ValueError(f"Unknown baseline method: {method}")
-                
-        return baseline
 
     def update(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
         """
-        Compute SCST loss and update actor.
-
+        Compute distillation loss on selected teacher hypotheses.
         Expected batch keys:
-            - audio_batch: [B_audio, C, T]
-            - audio_lengths: [B_audio]
-            - targets: [B_hyp, Lmax] (padded)
-            - target_lengths: [B_hyp]
-            - input_lengths: [B_hyp] (from CTC)
-            - log_probs_old: [B_hyp] (CTC log-probs per hypothesis)
-            - reward: [B_hyp]
-            - indexes: [B_hyp] mapping each hypothesis to its audio
+            - audio: [B, C, T]
+            - audio_len: [B]
+            - targets: [B, Lmax]
+            - target_lengths: [B]
         """
-        audio = batch["audio_batch"].to(self.device)
-        audio_lens = batch["audio_lengths"].to(self.device)
+        audio = batch["audio"].to(self.device)
+        audio_lens = batch["audio_len"].to(self.device)
         targets = batch["targets"].to(self.device)
         target_lens = batch["target_lengths"].to(self.device)
-        input_lens = batch["input_lengths"].to(self.device)
-        reward = batch["reward"].to(self.device)
-        indexes = batch["indexes"].to(self.device)
+        scores = batch["score"]
 
-        wers = batch["wers"].to(self.device)
-        cers = batch["cers"].to(self.device)
-
-        #wers_greedy = batch["wers_greedy"].to(self.device)
-        #cers_greedy = batch["cers_greedy"].to(self.device)
-
-        greedy_rewards = batch["greedy"].to(self.device)
-
-        self.actor.train()
+        self.student.train()
         self.opt.zero_grad()
 
-        # === mixed precision context ===
         with torch.amp.autocast(device_type="cuda", enabled=self.amp):
-            # Forward pass through ASR model
-            out = self.actor(processed_signal=audio, processed_signal_length=audio_lens)
+            # Forward student
+            out = self.student(processed_signal=audio, processed_signal_length=audio_lens)
             if isinstance(out, (list, tuple)):
                 logits, _ = out[0], out[1]
             else:
-                raise RuntimeError("Expected tuple (logits, enc_len) from actor forward")
+                raise RuntimeError("Expected tuple (logits, enc_len) from student forward")
 
             log_probs = _ensure_log_softmax(logits)
 
-            # Sequence log-prob per hypothesis (CTC)
-            seq_logp = _seq_logprob_ctc(log_probs, input_lens, targets, target_lens, self.blank_idx)
+            # Sequence log-prob per sample
+            seq_logp = _seq_logprob_ctc(
+                log_probs_btv=log_probs,
+                input_lengths_b=audio_lens,
+                targets_padded_bl=targets,
+                target_lengths_b=target_lens,
+                blank_idx=self.blank_idx
+            )
 
-           
+            # Maximize log-prob => minimize negative log-prob
+            loss = -seq_logp.mean()
 
-            #baseline_wers = self._compute_baseline(wers, indexes, method=self.baseline, greedy_reward=wers_greedy)
-            #baseline_cers = self._compute_baseline(cers, indexes, method=self.baseline, greedy_reward=cers_greedy)
-
-            #wer_c = _group_statistics(-wers, baseline_wers,indexes)
-            #cer_c = _group_statistics(-cers, baseline_cers,indexes)
-
-
-            # update : remplace wer_c / cer_c par
-            wer_norm = _normalize_adv(-wers, indexes)
-            cer_norm = _normalize_adv(-cers, indexes)
-
-            if self.only : 
-
-                reward_p = reward #- (wer_norm + cer_norm)
-
-            else : 
-
-                reward_p = (
-                    (self.alpha.sigmoid() if self.trainable else self.alpha) * reward +
-                    (self.beta.sigmoid() if self.trainable else self.beta) * wer_norm.tanh() +
-                    (self.gamma.sigmoid() if self.trainable else self.gamma) * cer_norm.tanh()
-)
-
-            # Compute baseline per audio
-            baseline_p = self._compute_baseline(reward_p, indexes, self.baseline, greedy_reward=greedy_rewards)
-            
-            # Advantage = reward - baseline
-            #advantage = _group_statistics(reward=reward_p, values_old=baseline_p, indexes=indexes)
-
-            advantage = reward_p - baseline_p
-
-            # Diagnostics BEFORE detach
-            adv_mean = advantage.mean().item()
-            adv_std = advantage.std(unbiased=False).item()
-            seq_logp_mean = seq_logp.mean().item()
-            seq_logp_std = seq_logp.std(unbiased=False).item()
-
-            if self.regularize :
-
-                probs = log_probs.exp()
-                entropy_per_step = -(probs * log_probs).sum(dim=-1)
-                entropy = entropy_per_step.mean()
-                loss = -(advantage * seq_logp).mean() - self.ent_coeff * entropy
-
-            else : 
-
-                loss = -(advantage * seq_logp).mean() 
-
-        # Backprop with GradScaler (AMP aware)
+        # Backprop with GradScaler
         self.scaler.scale(loss).backward()
-
-        self.scaler.unscale_(self.opt)
-        torch.nn.utils.clip_grad_norm_(self.actor.parameters() , 1.0)
-
-        if self.trainable and self.opt_coeff is not None: 
-
-            self.opt_coeff.zero_grad()
-
-            self.scaler.unscale_(self.opt_coeff)
-            torch.nn.utils.clip_grad_norm_([self.alpha, self.beta, self.gamma] , 5.0)
-
-            #self.scaler.step(self.opt_coeff)
-            
-
-        self.scaler.step(self.opt)        
+        torch.nn.utils.clip_grad_norm_(self.student.parameters(), 1.0)
+        self.scaler.step(self.opt)
         self.scaler.update()
-      
-        # Grad-norm diagnostic (sample few params)
-        total_grad_norm = 0.0
-        cnt = 0
-        for p in self.actor.parameters():
-            if p.grad is not None:
-                total_grad_norm += p.grad.detach().norm().item()
-                cnt += 1
-        avg_grad_norm = (total_grad_norm / cnt) if cnt else 0.0
 
         return {
-            "scst_loss": float(loss.detach().cpu()),
-            "adv_mean": adv_mean,
-            "adv_std": adv_std,
-            "seq_logp_mean": seq_logp_mean,
-            "seq_logp_std": seq_logp_std,
-            "reward_mean": float(reward.mean().cpu()),
-            "reward_p_mean": float(reward_p.mean().cpu()),
-            "baseline_p_mean": float(baseline_p.mean().cpu()),
-            "avg_grad_norm": avg_grad_norm,
-            "cer_tanh_mean" : float(cer_norm.tanh().mean().cpu()),
-            "wer_tanh_mean" : float(wer_norm.tanh().mean().cpu())
+            "distill_loss": float(loss.detach().cpu()),
+            "seq_logp_mean": seq_logp.mean().item(),
+            "seq_logp_std": seq_logp.std(unbiased=False).item(),
+            "score_mean" : scores.mean().item(),
+            "score_std" : scores.std(unbiased=False).item()
         }

@@ -7,56 +7,44 @@ from torch.utils.data.distributed import DistributedSampler
 from nemo.collections.asr.models import EncDecCTCModel, EncDecCTCModelBPE
 
 import wandb
-import datasets
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 
-from RLNF.utils.rollout import collect_batch, _wer_cer
-
+from RLNF.utils.rollout import collect_batch
 from ..dataloaders.reward_dataset import RewardDataCollator
 from ..Rewards.reward_processor import RewardModelProcessor
 from ..Rewards.reward_model import RewardModel
-from ..optimizer.optimizer import SCSTOptimizer
+from ..optimizer.optimizer import DistillationOptimizer
+from nemo.collections.asr.metrics.wer import word_error_rate
 
 
-class RLNFTrainerSCST:
+class RLNFTrainerDistill:
     """
-    RLNF Trainer for SCST (Self-Critical Sequence Training) — Single & Multi-GPU (DDP) compatible.
+    Trainer pour distillation ASR avec CTC.
+    Compatible Single & Multi-GPU (DDP).
     """
 
     def __init__(
         self,
-        asr_model: EncDecCTCModel | EncDecCTCModelBPE,
-        reward_model: RewardModel,
-        dataset: datasets,
+        student_model: EncDecCTCModel | EncDecCTCModelBPE,
+        teacher_model: EncDecCTCModel | EncDecCTCModelBPE,
+        dataset,
         processor: RewardModelProcessor,
         device: torch.device,
         wandb_logging: bool = True,
         wandb_project: str = "Bambara-RLNF",
-        run_name: str = "rlnf-scst",
+        run_name: str = "rlnf-distill",
         batch_size: int = 16,
         epochs: int = 3,
-        actor_lr: float = 1e-5,
+        lr: float = 1e-5,
         val_every: int = 200,
-        alpha : float = 1.0,
-        beta : float = 0.2,
-        gamma : float = 0.1,
         num_workers: int = 2,
-        ent_coeff : float = 0.01,
-        p_lr : float = 1e-3,
-        pin_memory: bool = True,
-        only : bool = False,
-        regularize : bool = False,
         amp: bool = False,
         save_dir: str = "checkpoints",
-        save_best_by: str = "val/wer",
+        save_best_by: str = "val/loss",
         save_best_mode: str = "min",
-        baseline : str = "max",
-        use_lm: bool = True,
-        trainable : bool = False,
-        beam_size: int = 4,
+        best_external_wer: float = float("inf"),
         resume_from_checkpoint: str | None = None,
-        best_external_wer: float = float("inf"),  # Nouveau paramètre
     ):
         # ================= DDP =================
         self.is_distributed = dist.is_available() and dist.is_initialized()
@@ -66,13 +54,11 @@ class RLNFTrainerSCST:
 
         self.device = device
         self.processor = processor
-        self.reward_model = reward_model
+        self.teacher_model = teacher_model.to(device)
         self.epochs = epochs
         self.val_every = val_every
         self.current_epoch = 0
         self.batch_size = batch_size
-        self.use_lm = use_lm
-        self.beam_size = beam_size
         self.resume_from_checkpoint = resume_from_checkpoint
         self.global_step = 0
 
@@ -82,11 +68,7 @@ class RLNFTrainerSCST:
         self.save_best_by = save_best_by
         self.save_best_mode = save_best_mode
         self.best_val = float("inf") if save_best_mode == "min" else -float("inf")
-        self.best_scst_loss = float("inf")
-
-        # Initialisation avec WER externe
-        if best_external_wer != float("inf"):
-            self.best_val = best_external_wer
+        if best_external_wer != float("inf"): self.best_wer = best_external_wer
 
         # ================= LOGGING =================
         self.tb_writer = SummaryWriter(f"tb_logs/{run_name}") if self.is_main else None
@@ -106,7 +88,7 @@ class RLNFTrainerSCST:
             shuffle=train_sampler is None,
             collate_fn=collate_fn,
             num_workers=num_workers,
-            pin_memory=pin_memory,
+            pin_memory=True,
         )
 
         self.val_loader = DataLoader(
@@ -116,23 +98,15 @@ class RLNFTrainerSCST:
             shuffle=False,
             collate_fn=collate_fn,
             num_workers=num_workers,
-            pin_memory=pin_memory,
+            pin_memory=True,
         )
 
-        # ================= SCST =================
-        self.scst = SCSTOptimizer(
-            actor=asr_model,
-            lr=actor_lr,
-            p_lr=p_lr,
-            trainable=trainable,
-            alpha=alpha,
-            beta=beta,
-            gamma=gamma,
-            baseline=baseline,
-            ent_coeff=ent_coeff,
-            regularize=regularize,
+        # ================= DISTILLATION =================
+        self.optimizer = DistillationOptimizer(
+            student=student_model,
+            teacher=self.teacher_model,
+            lr=lr,
             device=device,
-            only=only,
             amp=amp
         )
 
@@ -158,54 +132,40 @@ class RLNFTrainerSCST:
                 )
 
                 for batch in pbar:
-                    actor = self.scst.actor.module if self.is_distributed else self.scst.actor
+                    student = self.optimizer.student.module if self.is_distributed else self.optimizer.student
 
                     # === Collect batch ===
                     batch_dict = collect_batch(
                         batch=batch,
-                        asr_model=actor,
-                        reward_model=self.reward_model,
+                        asr_model=student,
+                        reward_model=self.teacher_model,  # teacher used to provide targets
                         processor=self.processor,
                         device=self.device,
-                        use_lm=self.use_lm,
-                        beam_size=self.beam_size
+                        use_lm=False,
+                        beam_size=4
                     )
 
-                    # === Reward sync across GPUs ===
-                    if self.is_distributed:
-                        batch_dict["reward"] = batch_dict["reward"].to(self.device)
-                        torch.distributed.all_reduce(batch_dict["reward"], op=torch.distributed.ReduceOp.SUM)
-                        batch_dict["reward"] /= self.world_size
-
-                    # === SCST update ===
-                    stats = self.scst.update(batch_dict)
+                    # === Distillation update ===
+                    stats = self.optimizer.update(batch_dict)
 
                     if self.is_main:
-                        scst_loss = stats["scst_loss"]
-                        if abs(scst_loss) < abs(self.best_scst_loss):
-                            self.best_scst_loss = abs(scst_loss)
-                            self.save_actor_by_loss(global_step, scst_loss)
+                        loss = stats["distill_loss"]
+                        #if loss < self.best_val:
+                        #    self.best_val = loss
+                        #    self.save_student_best(global_step, loss)
 
-                        # Logging
-                        if self._use_wandb and wandb.run is not None:
+                        if self._use_wandb:
                             wandb.log({f"train/{k}": v for k, v in stats.items()}, step=global_step)
-                        for k, v in stats.items():
-                            self.tb_writer.add_scalar(f"train/{k}", v, global_step)
+                        if self.tb_writer is not None:
+                            for k, v in stats.items():
+                                self.tb_writer.add_scalar(f"train/{k}", v, global_step)
 
-                        pbar.set_postfix({
-                            "scst_loss": f"{scst_loss:.4f}",
-                            "reward_mean": f"{stats['reward_mean']:.4f}"
-                        })
+                        pbar.set_postfix({"distill_loss": f"{loss:.4f}"})
 
                     global_step += 1
 
                     # Validation
-                    do_val = self.val_every > 0 and global_step % self.val_every == 0
-                    if self.is_distributed:
-                        val_tensor = torch.tensor(int(do_val), device=self.device)
-                        dist.broadcast(val_tensor, src=0)
-                        do_val = bool(val_tensor.item())
-                    if do_val:
+                    if self.val_every > 0 and global_step % self.val_every == 0:
                         self.validate(global_step)
                         self.save_checkpoint(global_step)
 
@@ -217,177 +177,97 @@ class RLNFTrainerSCST:
                 self.save_final()
                 if self._use_wandb:
                     wandb.finish()
-                self.tb_writer.close()
+                if self.tb_writer is not None:
+                    self.tb_writer.close()
 
     # =====================================================
     # VALIDATION
     # =====================================================
     def validate(self, step: int, end_of_epoch: bool = False):
-        actor = self.scst.actor.module if self.is_distributed else self.scst.actor
-        actor.eval()
+        student = self.optimizer.student.module if self.is_distributed else self.optimizer.student
+        student.eval()
 
-        wers, cers, rewards = [], [], []
+        losses = []
+        wers = []
+        cers = []
 
         with torch.no_grad():
-
             pbar_val = tqdm(self.val_loader, leave=False, disable=not self.is_main, desc=f"Validation at step {step}")
             for batch in pbar_val:
-                actor.spec_augmentation = None
-                actor.sample_rate = 16000
-                actor.preprocessor.featurizer.to(self.device)
-
                 val_dict = collect_batch(
                     batch=batch,
-                    asr_model=actor,
-                    reward_model=self.reward_model,
+                    asr_model=student,
+                    reward_model=self.teacher_model,
                     processor=self.processor,
                     device=self.device,
-                    use_lm=self.use_lm,
-                    beam_size=self.beam_size
+                    use_lm=False,
+                    beam_size=4
                 )
 
-                # References
-                indexes = val_dict["indexes"]
-                expanded = batch["text"][indexes]
-                refs = [
-                    self.processor.tokenizer.batch_decode(expanded[indexes == i], skip_special_tokens=True)
-                    for i in torch.unique(indexes)
-                ]
-
-                # Compute WER/CER
-                wms, cms = _wer_cer(val_dict["texts"], refs)
-                wers.append(wms)
-                cers.append(cms)
-
-                # Rewards mean
-                rewards.append(val_dict["reward"].mean())
-
-                #if self._use_wandb:
-                #    wandb.log({
-                #        "val/wer": sum(wers)/len(wers),
-                #        "val/cer": sum(cers)/len(cers),
-                #        "val/reward": sum(rewards)/len(rewards),
-                #        "step": step,
-                #        "reward" : sum(rewards)/len(rewards)
-                #    })
+                stats_val = self.optimizer.update(val_dict)
+                losses.append(stats_val["distill_loss"])
+                wers.append(word_error_rate(val_dict["greedy_text"], batch["text"]))
+                cers.append(word_error_rate(val_dict["greedy_text"], batch["text"], use_cer=True))
 
 
-            # =======================
-            # Aggregate metrics
-            # =======================
-            mean_wer = sum(wers) / len(wers)
-            mean_cer = sum(cers) / len(cers)
-            mean_reward = sum(rewards) / len(rewards)
+        mean_loss = sum(losses) / len(losses)
+        mean_wer = sum(wers) / len(wers)
+        mean_cer = sum(cers) / len(cers)
 
-            # ---- WandB logging ----
+        if self.is_main:
             if self._use_wandb:
+                wandb.log({"val/distill_loss": mean_loss,
+                           "val/wer" : mean_wer ,
+                           "val/cer" : mean_cer}, step=step)
 
-                wandb.log({
-                    "val/wer": mean_wer,
-                    "val/cer": mean_cer,
-                    "val/reward": mean_reward,
-                    "val/best_wer": self.best_val,
-                }, step=step)
-
-            # =======================
-            # Save if WER improved
-            # =======================
-            improved = (
-                (self.save_best_mode == "min" and mean_wer < self.best_val)
-                or
-                (self.save_best_mode == "max" and mean_wer > self.best_val)
-            )
+            improved = self.save_best_mode == "min" and mean_loss < self.best_val
+            improved_wer = self.save_best_mode == "min" and mean_wer < self.best_wer
+            
+            if improved_wer:
+                self.best_wer = mean_wer
+                self.save_student_best_wer(step, mean_wer)
 
             if improved:
-                if self.is_main:
-                    old = self.best_val
-                    self.best_val = mean_wer
-                    
-                    # Save checkpoint + actor
-                    self.save_best(step)
+                self.best_val = mean_loss
+                self.save_student_best(step, mean_loss)
 
-                    if self._use_wandb:
-                        wandb.log({
-                            "val/wer_improved": 1,
-                            "val/wer_delta": old - mean_wer,
-                        }, step=step)
-            else:
-                if self.is_main and self._use_wandb:
-                    wandb.log({
-                        "val/wer_improved": 0,
-                    }, step=step)
-
-
-        actor.train()
+        student.train()
 
     # =====================================================
     # SAVE / LOAD
     # =====================================================
-    def save_best(self, step: int):
-        actor = self.scst.actor.module if self.is_distributed else self.scst.actor
-        path = os.path.join(self.save_dir, f"best_actor_step{step}.nemo")
-        try:
-            actor.save_to(path)
-            print(f"[save_best] actor saved -> {path}")
-        except Exception as e:
-            torch.save(actor.state_dict(), path.replace(".nemo", ".pt"))
+    def save_student_best(self, step: int, loss: float):
+        student = self.optimizer.student.module if self.is_distributed else self.optimizer.student
+        path = os.path.join(self.save_dir, f"best_student_step{step}_loss{loss:.4f}.nemo")
+        student.save_to(path)
+
+    def save_student_best_wer(self, step: int, wer: float):
+        student = self.optimizer.student.module if self.is_distributed else self.optimizer.student
+        path = os.path.join(self.save_dir, f"best_student_step{step}_wer{wer:.4f}.nemo")
+        student.save_to(path)
 
     def save_final(self):
-        actor = self.scst.actor.module if self.is_distributed else self.scst.actor
-        actor.save_to("actor_final.nemo")
+        student = self.optimizer.student.module if self.is_distributed else self.optimizer.student
+        student.save_to(os.path.join(self.save_dir, "student_final.nemo"))
 
     def save_checkpoint(self, step: int, name="last"):
         if not self.is_main:
             return
-        actor = self.scst.actor.module if self.is_distributed else self.scst.actor
+        student = self.optimizer.student.module if self.is_distributed else self.optimizer.student
         ckpt = {
-            "actor": actor.state_dict(),
+            "student": student.state_dict(),
             "epoch": self.current_epoch,
             "global_step": step,
             "best_val": self.best_val,
-            "best_scst_loss": self.best_scst_loss,
         }
-        if self.scst.trainable:
-            ckpt.update({
-                "alpha": self.scst.alpha.detach().cpu(),
-                "beta": self.scst.beta.detach().cpu(),
-                "gamma": self.scst.gamma.detach().cpu(),
-                "opt_coeff": self.scst.opt_coeff.state_dict() if self.scst.opt_coeff else None,
-            })
         path = os.path.join(self.save_dir, f"checkpoint_step{step}.pt")
         torch.save(ckpt, path)
 
     def load_checkpoint(self, path: str):
-
         map_location = {"cuda:%d" % 0: "cuda:%d" % self.rank} if self.is_distributed else self.device
         ckpt = torch.load(path, map_location=map_location)
-
-        actor = self.scst.actor.module if self.is_distributed else self.scst.actor
-        actor.load_state_dict(ckpt["actor"])
-
+        student = self.optimizer.student.module if self.is_distributed else self.optimizer.student
+        student.load_state_dict(ckpt["student"])
         self.current_epoch = ckpt.get("epoch", 0)
         self.global_step = ckpt.get("global_step", 0)
         self.best_val = ckpt.get("best_val", self.best_val)
-        self.best_scst_loss = ckpt.get("best_scst_loss", self.best_scst_loss)
-
-        if self.scst.trainable and "alpha" in ckpt:
-
-            self.scst.alpha.data = ckpt["alpha"].to(self.device)
-            self.scst.beta.data = ckpt["beta"].to(self.device)
-            self.scst.gamma.data = ckpt["gamma"].to(self.device)
-
-            if self.scst.opt_coeff and ckpt.get("opt_coeff"):
-
-                self.scst.opt_coeff.load_state_dict(ckpt["opt_coeff"])
-
-        if self.is_main:
-            print(f"[checkpoint] resumed from {path} | epoch={self.current_epoch}, step={self.global_step}")
-
-    def save_actor_by_loss(self, step: int, scst_loss: float):
-        actor = self.scst.actor.module if self.is_distributed else self.scst.actor
-        path = os.path.join(self.save_dir, f"best_actor_by_loss_step{step}_loss{scst_loss:.4f}.nemo")
-        try:
-            actor.save_to(path)
-        except Exception as e:
-            torch.save(actor.state_dict(), path.replace(".nemo", ".pt"))
-    

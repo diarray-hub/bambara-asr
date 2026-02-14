@@ -11,199 +11,7 @@ import importlib.resources as rsc
 import RLNF.ressources
 from nemo.collections.asr.metrics.wer import word_error_rate
 
-def _wer_cer(hyps, refs, compute : bool = True):
 
-    if isinstance(refs, list) and len(refs) > 0 and not isinstance(refs[0], list):
-        refs = [[r] for r in refs]
-
-    # Normalisation hyps
-    if isinstance(hyps, list) and len(hyps) > 0 and not isinstance(hyps[0], list):
-        hyps = [[h] for h in hyps]
-
-    # Sécurité minimale
-    assert len(hyps) == len(refs), "hyps et refs n'ont pas la même longueur"
-
-    wers = [
-        word_error_rate([hyps[group_id][j]], [refs[group_id][j]])
-        for group_id in range(len(refs))
-        for j in range(len(refs[group_id]))
-    ]
-    cers = [
-        word_error_rate([hyps[group_id][j]], [refs[group_id][j]], use_cer=True)
-        for group_id in range(len(refs))
-        for j in range(len(refs[group_id]))
-    ]
-
-    return (torch.tensor(wers).mean(), torch.tensor(cers).mean()) if compute else (torch.tensor(wers), torch.tensor(cers))
-
-def _mean_mean(T: torch.Tensor, indexes : torch.Tensor, only = True) -> Tuple[torch.Tensor] :
-    
-    """
-    Compute a 'mean of means' aggregation over grouped samples.
-
-    This function is designed for settings where multiple trajectories
-    (e.g. decoded hypotheses) belong to the same higher-level sample
-    (e.g. one audio), and we want each higher-level sample to contribute
-    equally, regardless of how many trajectories it has.
-
-    Args:
-        T:
-            Tensor of shape [B], containing per-trajectory values.
-            In PPO, this is typically the clipped surrogate objective
-            min(ratio * adv, clipped_ratio * adv).
-
-        indexes:
-            Tensor of shape [B], where indexes[b] indicates the group
-            (e.g. audio id) to which T[b] belongs.
-            All entries with the same index are averaged together.
-
-        only:
-            If True:
-                return (global_mean, global_std)
-                where statistics are computed over group-level means.
-            If False:
-                return (group_means, global_mean, global_std)
-
-    Returns:
-        If only=True:
-            mean_of_means:
-                Scalar tensor, average of per-group means.
-            std_of_means:
-                Scalar tensor, standard deviation of per-group means
-                (unbiased=False).
-
-        If only=False:
-            group_means:
-                Tensor of shape [N_groups], mean value for each group.
-            mean_of_means:
-                Scalar tensor.
-            std_of_means:
-                Scalar tensor.
-    """
-    unique_ids = torch.unique(indexes)
-    means = torch.empty_like(unique_ids, dtype=torch.float)
-    
-    for i, uid in enumerate(unique_ids) :
-        
-        means[i] = T[indexes == uid].mean()
-        
-    if only :
-    
-        return means.mean(), means.std(unbiased=False)
-    
-    return means, means.mean(), means.std(unbiased=False)
-
-def _normalize_adv(adv: torch.Tensor, indexes : torch.Tensor, eps : float = 1e-8) -> torch.Tensor:
-    
-    """
-        Normalize advantages independently for each group.
-
-        This function performs per-group (e.g. per-audio) advantage normalization.
-        All trajectories belonging to the same group are normalized using
-        that group's mean and standard deviation.
-
-        This is important in settings where each higher-level sample (audio)
-        produces a variable number of trajectories (e.g. multiple decoded texts),
-        and we want normalization to respect group boundaries.
-
-        Args:
-            adv:
-                Tensor of shape [B], containing raw advantage values
-                (e.g. A = R - V).
-
-            indexes:
-                Tensor of shape [B], where indexes[b] indicates the group
-                (e.g. audio id) to which adv[b] belongs.
-
-            eps:
-                Small constant added to the denominator for numerical stability.
-
-        Returns:
-            A_norm:
-                Tensor of shape [B], containing normalized advantages.
-                For each group i:
-                    mean(A_norm[indexes == i]) ≈ 0
-                    std(A_norm[indexes == i]) ≈ 1
-    """
-             
-    N = indexes.max().item() + 1
-    
-    A_norm = torch.empty_like(adv)
-    
-    for i in range(N) : 
-        
-        A_i = adv[indexes == i]
-        
-        mean = A_i.mean()
-        std = A_i.std(unbiased=False)
-        
-        A_norm[indexes == i ] = (A_i - mean) / (std + eps)
-        
-    return A_norm
-    
-def _same_num_hypotheses(indexes: torch.Tensor) -> bool:
-    """
-    Check whether all groups (audios) have the same number of hypotheses.
-    """
-    _, counts = torch.unique(indexes, return_counts=True)
-    return torch.all(counts == counts[0]).item()
-
-def _center_only(x, indexes):
-    x_c = torch.empty_like(x)
-    for i in torch.unique(indexes):
-        m = x[indexes == i].mean()
-        x_c[indexes == i] = x[indexes == i] - m
-    return x_c
-
-def _group_statistics(
-    reward: torch.Tensor,
-    values_old: torch.Tensor,
-    indexes: torch.Tensor,
-    eps: float = 1e-8,
-):
-    """
-    Compute advantages and critic targets depending on hypothesis structure.
-
-    Args:
-        reward:
-            Tensor [B], reward per hypothesis.
-        values_old:
-            Tensor [B], critic predictions (broadcasted if per-audio).
-        indexes:
-            Tensor [B], audio id for each hypothesis.
-        eps:
-            Numerical stability constant.
-
-    Returns:
-        adv:
-            Normalized advantages [B].
-        critic_target:
-            Target values for critic regression [B].
-        mode:
-            String describing which strategy was used.
-    """
-
-    same_hypo = _same_num_hypotheses(indexes)
-
-    # --------------------------------------------------
-    # CASE 1: Same number of hypotheses per audio
-    # --------------------------------------------------
-    if same_hypo:
-        # Classic PPO
-        adv = reward - values_old
-        adv = (adv - adv.mean()) / (adv.std(unbiased=False) + eps)
-
-        
-    # --------------------------------------------------
-    # CASE 2: Variable number of hypotheses per audio
-    # --------------------------------------------------
-    else:
-        # Advantage normalized per audio
-        #adv = reward - values_old
-        adv = _normalize_adv(reward, indexes, eps=eps)
-
-
-    return adv.detach() #, critic_target.detach(), mode
 
 @torch.no_grad()
 def decode_batch(
@@ -220,13 +28,14 @@ def decode_batch(
     """
 
     asr = asr_model
+    decoding_cfg = asr.cfg.decoding
 
     if use_lm :
         
         kenlm_path = rsc.files(RLNF.ressources) / "5gram_bambara.bin"
         kenlm_path = str(kenlm_path) 
         
-        decoding_cfg = asr.cfg.decoding
+        
         decoding_cfg.strategy = "pyctcdecode"
         decoding_cfg.beam.beam_size = beam_size           
         decoding_cfg.beam.return_best_hypothesis = False
@@ -234,8 +43,12 @@ def decode_batch(
         decoding_cfg.ngram_lm_alpha = 0.5        
         decoding_cfg.beam.beta = 1.5
         decoding_cfg.beam.search_type = "pyctcdecode"
+    
+    else :
+        decoding_cfg.strategy = "greedy_batch"
+        decoding_cfg.beam.return_best_hypothesis = True
 
-        asr.change_decoding_strategy(decoding_cfg)
+    asr.change_decoding_strategy(decoding_cfg)
     
     
     if hasattr(asr.decoding, "ctc_decoder_predictions_tensor"):
@@ -249,6 +62,7 @@ def decode_batch(
         return [h.text for h in hyps]
     else:
         return [[h.text for h in hyp] for hyp in hyps]
+
 
 
 
@@ -351,204 +165,103 @@ def collect_batch(
     device: torch.device,
     processor : RewardModelProcessor, 
     use_lm : bool = True,
-    beam_size : int = 4
+    beam_size : int = 4,
+    alpha  = 1.0,
+    beta = 0.3,
 ) -> Dict[str, torch.Tensor | List[str]]:
-    """
-    One on-policy rollout over a single mini-batch for PPO.
-    Stores ONLY CPU tensors needed for PPO; avoids time-major tensors.
-    """
+   
     
-    # for nemo
+    asr_model.eval()
+    reward_model.eval()
+   
     audios = batch["audio"].to(device)
     audio_lens = batch["audio_len"].to(device)    
 
-    # Eval/no-grad rollout
-    asr_model.eval()
-    reward_model.eval()
-    #critic.eval()
     
     reward_model.to(device)
-    #critic.to(device)
     asr_model.to(device)
     
-    R = [] #Rewards.
-    #V = [] #Values.
-    K = [] #numbers of trajectories of each audios.
-  
-    TARGETS = []
-    TARGET_LENS =[]
-    AUDIO = []
-    AUDIO_LENS = []
-    INPUT_LENS = []
-  
-
-    LOG_OLD = []
-
-    with torch.no_grad():
-        # Forward actor -> CTC log-probs and encoded lengths
-        # NeMo CTC typically returns (log_probs[B,T,V], enc_len[B], greedy_ids[B,T]) or similar tuple
+    out = asr_model(processed_signal=audios, processed_signal_length=audio_lens)
         
-
-        out = asr_model(processed_signal=audios, processed_signal_length=audio_lens)
+    #out = asr_model.forward(input_signal=audio, input_signal_length=audio_lens)
+    # Be tolerant to output tuple structure
+    if isinstance(out, (list, tuple)):
+        logits_or_logp3d = out[0]
+        enc_len = out[1]
+    else:
+        raise RuntimeError("Unexpected ASR forward() return; expected (log_probs, enc_len, ...).")
         
-        #out = asr_model.forward(input_signal=audio, input_signal_length=audio_lens)
-        # Be tolerant to output tuple structure
-        if isinstance(out, (list, tuple)):
-            logits_or_logp3d = out[0]
-            enc_len = out[1]
-        else:
-            raise RuntimeError("Unexpected ASR forward() return; expected (log_probs, enc_len, ...).")
-        
-        # === ensure log-probs for both decoding & CTCLoss ===
-        log_probs3d = _ensure_log_softmax(logits_or_logp3d)
+    # === ensure log-probs for both decoding & CTCLoss ===
+    log_probs3d = _ensure_log_softmax(logits_or_logp3d)
 
-        greedy_trans = decode_batch(log_probs3d, enc_len, asr_model, use_lm=False)
-
-        
-        # Decode to text (for reward model & diagnostics)
-        transcriptions = decode_batch(log_probs3d, enc_len, asr_model, use_lm=use_lm, beam_size=beam_size)
-
-
-        greedy_rewards = []
-        for i, g_tra in enumerate(greedy_trans):
-            g_text = [g_tra[0]]  # single hypo
-            tran = processor.tokenizer.batch_encode_plus(g_text, return_attention_mask=True, padding=True, return_tensors="pt")
-            audio_i = audios[i].unsqueeze(0)  # [1, T, F]
-            audio_len = audio_lens[i].unsqueeze(0)
-            reward_model_input = {
-                "audio": audio_i,
-                "audio_len": audio_len,
-                "text": tran["input_ids"],
-                "text_attention_mask": tran["attention_mask"],
-            }
-            reward_model_input = {k: v.to(device) if torch.is_tensor(v) else v for k, v in reward_model_input.items()}
-            g_reward = reward_model(**reward_model_input).logits.item()
-            greedy_rewards.append(g_reward)
-
-        greedy_rewards = torch.tensor(greedy_rewards, device=device)
-
-        greedy_refs = processor.tokenizer.batch_decode(batch["text"], skip_special_tokens=True)
-
-        #print(greedy_trans)
-        #print(greedy_refs)
-        #print(greedy_rewards)
-
-        #print(_wer_cer(greedy_trans, greedy_refs, False))
-        
-        for i, tra in enumerate(transcriptions) :
-        
-            tran = processor.tokenizer.batch_encode_plus(tra, return_attention_mask=True, padding=True, return_tensors="pt")
-            
-            tgt_lists, tgt_lens_list = _encode_texts_for_ctc(asr_model, tra)
-            tgt_tensors = [torch.tensor(x, dtype=torch.long) for x in tgt_lists]
-            tgt_padded = pad_sequence(tgt_tensors, batch_first=True, padding_value=0).to(device=device)  # [B, Lmax]
-            tgt_lens = torch.tensor(tgt_lens_list, dtype=torch.long, device=device)              # [B]
-            
-            K_i = len(tra)
-        
-
-            audio_i = audios[i]              # [T, F]
-            audio = audio_i.unsqueeze(0).repeat(K_i, 1, 1)   # [K_i, T, F]
-            
-
-            audio_len = audio_lens[i].expand(K_i)
-
-            
-            reward_model_input = {
-                "audio": audio,
-                "audio_len": audio_len,
-                "text": tran["input_ids"],
-                "text_attention_mask": tran["attention_mask"],
-            }
-
-            critic_model_input = {
-                "audio": audio
-            }
-            
-            reward_model_input = {k: v.to(device) if torch.is_tensor(v) else v for k, v in reward_model_input.items()}
-            critic_model_input = {k: v.to(device) if torch.is_tensor(v) else v for k, v in critic_model_input.items()}
-
-            reward = reward_model(**reward_model_input).logits
-            #values = critic(**critic_model_input)
-            
-            
-            # 5. Log-prob CTC (old policy)
-            logp_i = log_probs3d[i]          # [T_enc, V]
-            len_i  = enc_len[i]              # scalar
-
-            logp_i = logp_i.unsqueeze(0).repeat(K_i, 1, 1)   # [K_i, T_enc, V]
-            len_i  = len_i.expand(K_i) 
-            
-            blank_idx = _blank_index(asr_model)
-                    
-            logp_old = _seq_logprob_ctc(logp_i, len_i, tgt_padded, tgt_lens, blank_idx).detach()
-
-            
-            K.append(K_i)
-            
-            TARGETS.append(tgt_padded)
-            TARGET_LENS.append(tgt_lens)
-            AUDIO.append(audio)
-            AUDIO_LENS.append(audio_len)
-            INPUT_LENS.append(len_i)
-            
-            R.append(reward)
-            #V.append(values)
-            
-            LOG_OLD.append(logp_old)
-            
-        
-        
-        
-        Lmax = max(t.size(1) for t in TARGETS)
-
-        TARGETS_padded = [
-            F.pad(t, (0, Lmax - t.size(1))) for t in TARGETS
-        ]
-        
-        
-        audio_all = torch.cat(AUDIO, dim=0)              # [K_i, T, F]
-        audio_lens_all = torch.cat(AUDIO_LENS, dim=0)    # [K_i]
-
-        targets_all = torch.cat(TARGETS_padded, dim=0)          # [K_i, Lmax]
-        target_lens_all = torch.cat(TARGET_LENS, dim=0)  # [K_i]
-
-        input_lens_all = torch.cat(INPUT_LENS, dim=0)    # [K_i]
-
-        logp_old_all = torch.cat(LOG_OLD, dim=0)          # [K_i]
-        reward_all = torch.cat(R, dim=0)                  # [K_i]
-        #values_all = torch.cat(V, dim=0)
-        
-        indexes = torch.repeat_interleave(torch.arange(len(K)), torch.tensor(K, dtype=torch.long))
-    
-    expanded = batch["text"][indexes]
-    refs = [processor.tokenizer.batch_decode(expanded[indexes == i], skip_special_tokens=True)
-                    for i in torch.unique(indexes)]
-    
-    wms, cms = _wer_cer(transcriptions, refs, compute=False)
-
-    wms_greedy, cms_greedy = _wer_cer(greedy_trans, greedy_refs, compute=False)
+    greedy_trans = decode_batch(log_probs3d, enc_len, asr_model, use_lm=False) 
 
    
-   
+
+    transcriptions = decode_batch(log_probs3d, enc_len, asr_model, use_lm=use_lm, beam_size=beam_size)
     
-    # Return CPU payload only; keep raw text too (tiny memory footprint)
-    return {
-        "audio_batch": audio_all.cpu(),
-        "audio_lengths": audio_lens_all.cpu(),
-        "targets": targets_all.cpu(),          # [K_i, Lmax] (for PPO update)
-        "target_lengths": target_lens_all.cpu(),     # [K_i]
-        "input_lengths": input_lens_all.cpu(),       # [K_i] (time steps at CTC head)
-        "log_probs_old": logp_old_all.cpu(),      # [K_i]
-        "reward": reward_all.cpu(),               # [K_i]
-        #"values": values_all.cpu(),               # [K_i]
-        "texts": transcriptions,              # keep raw strings for reward/debug
-        "indexes" : indexes.cpu(),
-        "wers" : wms.cpu(),
-        "cers" : cms.cpu(),
-        "greedy" : greedy_rewards.cpu(),
-        "wers_greedy" : wms_greedy.cpu(),
-        "cers_greedy" : cms_greedy.cpu(),
-        #
-        # reward model text batch is not needed after reward is computed; not stored
-    }
+    FINAL_AUDIO = []
+    FINAL_AUDIO_LENS = []
+    FINAL_TARGETS = []
+    FINAL_TARGET_LENS = []
+        
+        
+    for i, tra in enumerate(transcriptions) :
+    
+        tran = processor.tokenizer.batch_encode_plus(tra, return_attention_mask=True, padding=True, return_tensors="pt")
+        
+
+        audio_i = audios[i].unsqueeze(0).repeat(len(tra), 1, 1)              # [T, F]
+        audio_len = audio_lens[i].expand(len(tra))
+
+            
+        reward_model_input = {
+            "audio": audio_i,
+            "audio_len": audio_len,
+            "text": tran["input_ids"],
+            "text_attention_mask": tran["attention_mask"],
+        }
+
+            
+        reward_model_input = {k: v.to(device) if torch.is_tensor(v) else v for k, v in reward_model_input.items()}
+
+        rewards = reward_model(**reward_model_input).logits
+        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
+        
+        tgt_ids, tgt_lens = _encode_texts_for_ctc(asr_model, tra)
+        tgt_pad = pad_sequence(
+            [torch.tensor(x) for x in tgt_ids],
+            batch_first=True,
+            padding_value=0
+        ).to(device)
+
+        tgt_lens = torch.tensor(tgt_lens, device=device)
+        logp_i = log_probs3d[i].unsqueeze(0).repeat(len(tra), 1, 1)
+        len_i = enc_len[i].expand(len(tra))
+
+        logp_ctc = _seq_logprob_ctc(
+            logp_i,
+            len_i,
+            tgt_pad,
+            tgt_lens,
+            _blank_index(asr_model)
+        )
+
+        scores = alpha * logp_ctc + beta * rewards
+        best = scores.argmax().item()
+
+        FINAL_AUDIO.append(audios[i].unsqueeze(0))
+        FINAL_AUDIO_LENS.append(audio_lens[i].unsqueeze(0))
+        FINAL_TARGETS.append(tgt_pad[best].unsqueeze(0))
+        FINAL_TARGET_LENS.append(tgt_lens[best].unsqueeze(0))
+
+        return {
+            "audio": torch.cat(FINAL_AUDIO).cpu(),
+            "audio_len": torch.cat(FINAL_AUDIO_LENS).cpu(),
+            "targets": torch.cat(FINAL_TARGETS).cpu(),
+            "target_lengths": torch.cat(FINAL_TARGET_LENS).cpu(),
+            "score" : scores,
+            "greedy_trans" : greedy_trans,
+        }
+        
+
