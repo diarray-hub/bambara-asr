@@ -211,6 +211,7 @@ def collect_batch(
     FINAL_LENS = []
     SCORES = []
     FINAL_SAMPLE_WEIGHT = []
+    REWARDS = [ ]
 
     for i, tra in enumerate(transcriptions) :
     
@@ -236,7 +237,9 @@ def collect_batch(
         reward_model_input = {k: v.to(device) if torch.is_tensor(v) else v for k, v in reward_model_input.items()}
 
         rewards = reward_model(**reward_model_input).logits
-        rewards = (rewards - rewards.mean()) #/ (rewards.std() + 1e-8)
+        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
+       
+        #reward = (reward - reward.mean()) / (reward.std() + 1e-8)
         
     
         logp_i = log_probs3d[i].unsqueeze(0).repeat(len(tra), 1, 1)
@@ -250,13 +253,15 @@ def collect_batch(
             _blank_index(asr_model)
         ).detach()
 
+        logp_ctc = (logp_ctc - logp_ctc.mean()) / (logp_ctc.std() + 1e-8)
+
         scores = alpha * logp_ctc + beta * rewards
 
         weights = torch.softmax(scores / temperature, dim=0).detach()
 
         best = scores.argmax().item()
 
-        SCORES.append(scores.mean())
+        SCORES.append(scores[best])
 
         FINAL_AUDIO.append(audios[i].unsqueeze(0))
         FINAL_AUDIO_LENS.append(audio_lens[i].unsqueeze(0))
@@ -265,6 +270,7 @@ def collect_batch(
         FINAL_LENS.append(len_i[best].unsqueeze(0))
 
         FINAL_SAMPLE_WEIGHT.append(weights[best])
+        REWARDS.append(rewards[best])
 
         Lmax = max(t.size(1) for t in FINAL_TARGETS)
 
@@ -279,6 +285,7 @@ def collect_batch(
         "target_lengths": torch.cat(FINAL_TARGET_LENS).cpu(),
         "input_lenght" : torch.cat(FINAL_LENS).cpu(),
         "score" : torch.stack(SCORES).cpu(),
+        "reward" : torch.stack(REWARDS).cpu(),
         "greedy_trans" : greedy_trans,
         "sample_weight" : torch.stack(FINAL_SAMPLE_WEIGHT).cpu()
     }

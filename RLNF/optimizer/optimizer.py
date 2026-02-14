@@ -39,6 +39,7 @@ class DistillationOptimizer:
         input_lenght = batch["input_lenght"].to(self.device)
         scores = batch["score"]
         sample_weight = batch["sample_weight"].to(self.device)  # [B]
+        rewards = batch["reward"]
 
 
         self.student.train()
@@ -77,5 +78,7 @@ class DistillationOptimizer:
             "seq_logp_mean": seq_logp.mean().item(),
             "seq_logp_std": seq_logp.std(unbiased=False).item(),
             "score_mean" : scores.mean().item(),
-            "score_std" : scores.std(unbiased=False).item()
+            "score_std" : scores.std(unbiased=False).item(),
+            "rewards_mean" : rewards.mean().item(),
+            "rewards_std" : rewards.std(unbiased=False).item()
         }
