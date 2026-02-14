@@ -237,7 +237,7 @@ def collect_batch(
         reward_model_input = {k: v.to(device) if torch.is_tensor(v) else v for k, v in reward_model_input.items()}
 
         rewards = reward_model(**reward_model_input).logits
-        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
+        rewards = (rewards - rewards.mean()) #/ (rewards.std() + 1e-8)
        
         #reward = (reward - reward.mean()) / (reward.std() + 1e-8)
         
@@ -253,7 +253,7 @@ def collect_batch(
             _blank_index(asr_model)
         ).detach()
 
-        logp_ctc = (logp_ctc - logp_ctc.mean()) / (logp_ctc.std() + 1e-8)
+        logp_ctc = (logp_ctc - logp_ctc.mean()) #/ (logp_ctc.std() + 1e-8)
 
         scores = alpha * logp_ctc + beta * rewards
 
@@ -261,7 +261,7 @@ def collect_batch(
 
         best = scores.argmax().item()
 
-        SCORES.append(scores[best])
+        SCORES.append(scores.mean())
 
         FINAL_AUDIO.append(audios[i].unsqueeze(0))
         FINAL_AUDIO_LENS.append(audio_lens[i].unsqueeze(0))
@@ -270,7 +270,7 @@ def collect_batch(
         FINAL_LENS.append(len_i[best].unsqueeze(0))
 
         FINAL_SAMPLE_WEIGHT.append(weights[best])
-        REWARDS.append(rewards[best])
+        REWARDS.append(rewards.mean())
 
         Lmax = max(t.size(1) for t in FINAL_TARGETS)
 
