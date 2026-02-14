@@ -27,7 +27,7 @@ class RLNFTrainerDistill:
     def __init__(
         self,
         student_model: EncDecCTCModel | EncDecCTCModelBPE,
-        teacher_model: EncDecCTCModel | EncDecCTCModelBPE,
+        reward_model,
         dataset,
         processor: RewardModelProcessor,
         device: torch.device,
@@ -38,7 +38,10 @@ class RLNFTrainerDistill:
         epochs: int = 3,
         lr: float = 1e-5,
         val_every: int = 200,
+        beam_size : int = 4,
         num_workers: int = 2,
+        alpha : float = 1.0,
+        beta : float = 0.3 ,
         amp: bool = False,
         save_dir: str = "checkpoints",
         save_best_by: str = "val/loss",
@@ -52,15 +55,18 @@ class RLNFTrainerDistill:
         self.world_size = dist.get_world_size() if self.is_distributed else 1
         self.is_main = self.rank == 0
 
+        self.teacher_model = reward_model
+        self.beam_size = beam_size
         self.device = device
         self.processor = processor
-        self.teacher_model = teacher_model.to(device)
         self.epochs = epochs
         self.val_every = val_every
         self.current_epoch = 0
         self.batch_size = batch_size
         self.resume_from_checkpoint = resume_from_checkpoint
         self.global_step = 0
+        self.alpha = alpha
+        self.beta = beta
 
         # ================= SAVE =================
         self.save_dir = save_dir
@@ -104,7 +110,6 @@ class RLNFTrainerDistill:
         # ================= DISTILLATION =================
         self.optimizer = DistillationOptimizer(
             student=student_model,
-            teacher=self.teacher_model,
             lr=lr,
             device=device,
             amp=amp
@@ -141,8 +146,10 @@ class RLNFTrainerDistill:
                         reward_model=self.teacher_model,  # teacher used to provide targets
                         processor=self.processor,
                         device=self.device,
-                        use_lm=False,
-                        beam_size=4
+                        use_lm=True,
+                        beam_size=self.beam_size,
+                        alpha=self.alpha,
+                        beta=self.beta
                     )
 
                     # === Distillation update ===
@@ -201,7 +208,8 @@ class RLNFTrainerDistill:
                     processor=self.processor,
                     device=self.device,
                     use_lm=False,
-                    beam_size=4
+                    alpha=self.alpha,
+                    beta=self.beta
                 )
 
                 stats_val = self.optimizer.update(val_dict)
