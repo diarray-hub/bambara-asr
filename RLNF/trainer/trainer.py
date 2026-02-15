@@ -10,8 +10,9 @@ import wandb
 import datasets
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
+from nemo.collections.asr.metrics.wer import word_error_rate
 
-from RLNF.utils.rollout import collect_batch, _wer_cer
+from ..utils.rollout import collect_batch, _wer_cer, decode_batch
 
 from ..dataloaders.reward_dataset import RewardDataCollator
 from ..Rewards.reward_processor import RewardModelProcessor
@@ -223,7 +224,16 @@ class RLNFTrainerSCST:
     # VALIDATION
     # =====================================================
     def validate(self, step: int, end_of_epoch: bool = False):
+
         actor = self.scst.actor.module if self.is_distributed else self.scst.actor
+
+        if actor.cfg.decoding.strategy == "pyctcdecode" :
+            decoding_cfg = actor.cfg.decoding
+            decoding_cfg.strategy = "greedy_batch"
+            decoding_cfg.beam.return_best_hypothesis = True
+
+            actor.change_decoding_strategy(decoding_cfg)
+
         actor.eval()
 
         wers, cers, rewards = [], [], []
@@ -232,35 +242,45 @@ class RLNFTrainerSCST:
 
             pbar_val = tqdm(self.val_loader, leave=False, disable=not self.is_main, desc=f"Validation at step {step}")
             for batch in pbar_val:
-                actor.spec_augmentation = None
-                actor.sample_rate = 16000
-                actor.preprocessor.featurizer.to(self.device)
+               
+               audio = batch["audio"].to(self.device)
+               audio_len = batch["audio_len"].to(self.device)
 
-                val_dict = collect_batch(
-                    batch=batch,
-                    asr_model=actor,
-                    reward_model=self.reward_model,
-                    processor=self.processor,
-                    device=self.device,
-                    use_lm=self.use_lm,
-                    beam_size=self.beam_size
-                )
+               
+               out = actor(processed_signal = audio, processed_signal_length = audio_len)
+               logits, enc_len = out[0], out[1]
 
-                # References
-                indexes = val_dict["indexes"]
-                expanded = batch["text"][indexes]
-                refs = [
-                    self.processor.tokenizer.batch_decode(expanded[indexes == i], skip_special_tokens=True)
-                    for i in torch.unique(indexes)
-                ]
+               log_probs = logits.log_softmax(dim=-1)
 
-                # Compute WER/CER
-                wms, cms = _wer_cer(val_dict["texts"], refs)
-                wers.append(wms)
-                cers.append(cms)
+               preds = decode_batch(
+                   log_probs=log_probs,
+                   enc_len=enc_len,
+                   use_lm=False
+               )
 
-                # Rewards mean
-                rewards.append(val_dict["reward"].mean())
+               refs = self.processor.tokenizer.batch_decode(
+                   batch["text"],
+                   skip_special_tokens=True
+               )
+
+               re = self.processor.tokenizer.encode_plus(preds, return_attention_mask=True, padding=True, return_tensors="pt")
+
+               reward_model_input = {
+                   "audio": audio,
+                   "audio_len": audio_len,
+                   "text": re["input_ids"],
+                   "text_attention_mask": re["attention_mask"],
+                   }
+               
+               reward_model_input = {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in reward_model_input.items()}
+               
+               reward = self.reward_model(**reward_model_input)
+               
+               wers.append(word_error_rate(preds, refs))
+               cers.append(word_error_rate(preds, refs, use_cer=True))
+
+            # Rewards mean
+               rewards.append(reward)
 
                 #if self._use_wandb:
                 #    wandb.log({

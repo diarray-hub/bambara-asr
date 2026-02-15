@@ -149,7 +149,7 @@ class SCSTOptimizer:
 
             if self.only : 
 
-                reward_p = reward #- (wer_norm + cer_norm)
+                reward_p = reward - (wer_norm + cer_norm)
 
             else : 
 

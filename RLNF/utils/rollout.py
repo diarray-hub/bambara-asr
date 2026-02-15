@@ -220,13 +220,14 @@ def decode_batch(
     """
 
     asr = asr_model
+    decoding_cfg = asr.cfg.decoding
 
     if use_lm :
         
         kenlm_path = rsc.files(RLNF.ressources) / "5gram_bambara.bin"
         kenlm_path = str(kenlm_path) 
         
-        decoding_cfg = asr.cfg.decoding
+        
         decoding_cfg.strategy = "pyctcdecode"
         decoding_cfg.beam.beam_size = beam_size           
         decoding_cfg.beam.return_best_hypothesis = False
@@ -235,7 +236,13 @@ def decode_batch(
         decoding_cfg.beam.beta = 1.5
         decoding_cfg.beam.search_type = "pyctcdecode"
 
-        asr.change_decoding_strategy(decoding_cfg)
+    else :
+        
+        decoding_cfg.strategy = "greedy_batch"        
+        decoding_cfg.beam.return_best_hypothesis = True
+
+
+    asr.change_decoding_strategy(decoding_cfg)
     
     
     if hasattr(asr.decoding, "ctc_decoder_predictions_tensor"):
@@ -408,8 +415,19 @@ def collect_batch(
         # Decode to text (for reward model & diagnostics)
         transcriptions = decode_batch(log_probs3d, enc_len, asr_model, use_lm=use_lm, beam_size=beam_size)
 
+        tran = processor.tokenizer.batch_encode_plus(greedy_trans, return_attention_mask=True, padding=True, return_tensors="pt")
+    
+        reward_model_input = {
+            "audio": audio,
+            "audio_len": audio_lens,
+            "text": tran["input_ids"],
+            "text_attention_mask": tran["attention_mask"],
+        }
+        reward_model_input = {k: v.to(device) if torch.is_tensor(v) else v for k, v in reward_model_input.items()}
+        g_reward = reward_model(**reward_model_input).logits.item()
 
-        greedy_rewards = []
+
+        """  greedy_rewards = []
         for i, g_tra in enumerate(greedy_trans):
             g_text = [g_tra[0]]  # single hypo
             tran = processor.tokenizer.batch_encode_plus(g_text, return_attention_mask=True, padding=True, return_tensors="pt")
@@ -428,7 +446,7 @@ def collect_batch(
         greedy_rewards = torch.tensor(greedy_rewards, device=device)
 
         greedy_refs = processor.tokenizer.batch_decode(batch["text"], skip_special_tokens=True)
-
+        """
         #print(greedy_trans)
         #print(greedy_refs)
         #print(greedy_rewards)
@@ -527,7 +545,6 @@ def collect_batch(
     
     wms, cms = _wer_cer(transcriptions, refs, compute=False)
 
-    wms_greedy, cms_greedy = _wer_cer(greedy_trans, greedy_refs, compute=False)
 
    
    
@@ -546,9 +563,8 @@ def collect_batch(
         "indexes" : indexes.cpu(),
         "wers" : wms.cpu(),
         "cers" : cms.cpu(),
-        "greedy" : greedy_rewards.cpu(),
-        "wers_greedy" : wms_greedy.cpu(),
-        "cers_greedy" : cms_greedy.cpu(),
+        "greedy" : g_reward,
         #
         # reward model text batch is not needed after reward is computed; not stored
     }
+
