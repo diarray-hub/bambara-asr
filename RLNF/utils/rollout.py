@@ -418,7 +418,7 @@ def collect_batch(
         tran = processor.tokenizer.batch_encode_plus(greedy_trans, return_attention_mask=True, padding=True, return_tensors="pt")
     
         reward_model_input = {
-            "audio": audio,
+            "audio": audios,
             "audio_len": audio_lens,
             "text": tran["input_ids"],
             "text_attention_mask": tran["attention_mask"],
