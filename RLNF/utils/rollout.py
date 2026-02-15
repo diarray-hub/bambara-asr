@@ -424,7 +424,7 @@ def collect_batch(
             "text_attention_mask": tran["attention_mask"],
         }
         reward_model_input = {k: v.to(device) if torch.is_tensor(v) else v for k, v in reward_model_input.items()}
-        g_reward = reward_model(**reward_model_input).logits.item()
+        g_reward = reward_model(**reward_model_input).logits
 
 
         """  greedy_rewards = []
