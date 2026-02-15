@@ -264,7 +264,7 @@ class RLNFTrainerSCST:
                    skip_special_tokens=True
                )
 
-               re = self.processor.tokenizer.encode_plus(preds, return_attention_mask=True, padding=True, return_tensors="pt")
+               re = self.processor.tokenizer.batch_encode_plus(preds, return_attention_mask=True, padding=True, return_tensors="pt")
 
                reward_model_input = {
                    "audio": audio,
