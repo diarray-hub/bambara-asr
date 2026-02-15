@@ -255,6 +255,7 @@ class RLNFTrainerSCST:
                preds = decode_batch(
                    log_probs=log_probs,
                    enc_len=enc_len,
+                   asr_model=actor,
                    use_lm=False
                )
 
