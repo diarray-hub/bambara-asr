@@ -275,7 +275,7 @@ class RLNFTrainerSCST:
                
                reward_model_input = {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in reward_model_input.items()}
                
-               reward = self.reward_model(**reward_model_input)
+               reward = self.reward_model(**reward_model_input).logits
                
                wers.append(word_error_rate(preds, refs))
                cers.append(word_error_rate(preds, refs, use_cer=True))
