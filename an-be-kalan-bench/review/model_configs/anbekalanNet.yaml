@@ -1,0 +1,636 @@
+preprocessor:
+  _target_: nemo.collections.asr.modules.AudioToMelSpectrogramPreprocessor
+  normalize: per_feature
+  window_size: 0.02
+  sample_rate: 16000
+  window_stride: 0.01
+  window: hann
+  features: 64
+  n_fft: 512
+  frame_splicing: 1
+  dither: 1.0e-05
+  stft_conv: false
+spec_augment:
+  _target_: nemo.collections.asr.modules.SpectrogramAugmentation
+  rect_freq: 50
+  rect_masks: 0
+  rect_time: 120
+encoder:
+  _target_: nemo.collections.asr.modules.ConvASREncoder
+  feat_in: 64
+  activation: relu
+  conv_mask: true
+  jasper:
+  - filters: 256
+    repeat: 1
+    kernel:
+    - 33
+    stride:
+    - 2
+    dilation:
+    - 1
+    dropout: 0.0
+    residual: false
+    separable: true
+  - filters: 256
+    repeat: 5
+    kernel:
+    - 33
+    stride:
+    - 1
+    dilation:
+    - 1
+    dropout: 0.0
+    residual: true
+    separable: true
+  - filters: 256
+    repeat: 5
+    kernel:
+    - 33
+    stride:
+    - 1
+    dilation:
+    - 1
+    dropout: 0.0
+    residual: true
+    separable: true
+  - filters: 256
+    repeat: 5
+    kernel:
+    - 33
+    stride:
+    - 1
+    dilation:
+    - 1
+    dropout: 0.0
+    residual: true
+    separable: true
+  - filters: 256
+    repeat: 5
+    kernel:
+    - 39
+    stride:
+    - 1
+    dilation:
+    - 1
+    dropout: 0.0
+    residual: true
+    separable: true
+  - filters: 256
+    repeat: 5
+    kernel:
+    - 39
+    stride:
+    - 1
+    dilation:
+    - 1
+    dropout: 0.0
+    residual: true
+    separable: true
+  - filters: 256
+    repeat: 5
+    kernel:
+    - 39
+    stride:
+    - 1
+    dilation:
+    - 1
+    dropout: 0.0
+    residual: true
+    separable: true
+  - filters: 512
+    repeat: 5
+    kernel:
+    - 51
+    stride:
+    - 1
+    dilation:
+    - 1
+    dropout: 0.0
+    residual: true
+    separable: true
+  - filters: 512
+    repeat: 5
+    kernel:
+    - 51
+    stride:
+    - 1
+    dilation:
+    - 1
+    dropout: 0.0
+    residual: true
+    separable: true
+  - filters: 512
+    repeat: 5
+    kernel:
+    - 51
+    stride:
+    - 1
+    dilation:
+    - 1
+    dropout: 0.0
+    residual: true
+    separable: true
+  - filters: 512
+    repeat: 5
+    kernel:
+    - 63
+    stride:
+    - 1
+    dilation:
+    - 1
+    dropout: 0.0
+    residual: true
+    separable: true
+  - filters: 512
+    repeat: 5
+    kernel:
+    - 63
+    stride:
+    - 1
+    dilation:
+    - 1
+    dropout: 0.0
+    residual: true
+    separable: true
+  - filters: 512
+    repeat: 5
+    kernel:
+    - 63
+    stride:
+    - 1
+    dilation:
+    - 1
+    dropout: 0.0
+    residual: true
+    separable: true
+  - filters: 512
+    repeat: 5
+    kernel:
+    - 75
+    stride:
+    - 1
+    dilation:
+    - 1
+    dropout: 0.0
+    residual: true
+    separable: true
+  - filters: 512
+    repeat: 5
+    kernel:
+    - 75
+    stride:
+    - 1
+    dilation:
+    - 1
+    dropout: 0.0
+    residual: true
+    separable: true
+  - filters: 512
+    repeat: 5
+    kernel:
+    - 75
+    stride:
+    - 1
+    dilation:
+    - 1
+    dropout: 0.0
+    residual: true
+    separable: true
+  - filters: 512
+    repeat: 1
+    kernel:
+    - 87
+    stride:
+    - 1
+    dilation:
+    - 2
+    dropout: 0.0
+    residual: false
+    separable: true
+  - filters: 1024
+    repeat: 1
+    kernel:
+    - 1
+    stride:
+    - 1
+    dilation:
+    - 1
+    dropout: 0.0
+    residual: false
+decoder:
+  _target_: nemo.collections.asr.modules.ConvASRDecoder
+  feat_in: 1024
+  num_classes: 63
+  vocabulary:
+  - ' '
+  - ''''
+  - '-'
+  - A
+  - B
+  - C
+  - E
+  - F
+  - G
+  - H
+  - I
+  - J
+  - K
+  - L
+  - M
+  - 'N'
+  - O
+  - P
+  - Q
+  - R
+  - S
+  - T
+  - U
+  - W
+  - 'Y'
+  - Z
+  - a
+  - b
+  - c
+  - d
+  - e
+  - f
+  - g
+  - h
+  - i
+  - j
+  - k
+  - l
+  - m
+  - 'n'
+  - o
+  - p
+  - q
+  - r
+  - s
+  - t
+  - u
+  - v
+  - w
+  - x
+  - 'y'
+  - z
+  - à
+  - è
+  - é
+  - ô
+  - ù
+  - ŋ
+  - Ɔ
+  - Ɛ
+  - ɔ
+  - ɛ
+  - ɲ
+optim:
+  name: novograd
+  lr: 0.001
+  betas:
+  - 0.95
+  - 0.5
+  weight_decay: 0.0001
+  sched:
+    name: CosineAnnealing
+    max_steps: 27100
+    warmup_ratio: 0.08
+    min_lr: 1.0e-05
+    last_epoch: -1
+target: nemo.collections.asr.models.ctc_models.EncDecCTCModel
+train_ds:
+  manifest_filepath: ./an-be-kalan-bench/train-manifest.jsonl
+  sample_rate: 16000
+  max_duration: 30
+  min_duration: 0.1
+  batch_size: 32
+  num_workers: 16
+  shuffle: true
+  normalize_transcripts: false
+  labels:
+  - ' '
+  - ''''
+  - '-'
+  - A
+  - B
+  - C
+  - E
+  - F
+  - G
+  - H
+  - I
+  - J
+  - K
+  - L
+  - M
+  - 'N'
+  - O
+  - P
+  - Q
+  - R
+  - S
+  - T
+  - U
+  - W
+  - 'Y'
+  - Z
+  - a
+  - b
+  - c
+  - d
+  - e
+  - f
+  - g
+  - h
+  - i
+  - j
+  - k
+  - l
+  - m
+  - 'n'
+  - o
+  - p
+  - q
+  - r
+  - s
+  - t
+  - u
+  - v
+  - w
+  - x
+  - 'y'
+  - z
+  - à
+  - è
+  - é
+  - ô
+  - ù
+  - ŋ
+  - Ɔ
+  - Ɛ
+  - ɔ
+  - ɛ
+  - ɲ
+validation_ds:
+  manifest_filepath: ./an-be-kalan-bench/test-manifest.jsonl
+  sample_rate: 16000
+  max_duration: 15
+  batch_size: 32
+  num_workers: 16
+  shuffle: false
+  normalize_transcripts: false
+  labels:
+  - ' '
+  - ''''
+  - '-'
+  - A
+  - B
+  - C
+  - E
+  - F
+  - G
+  - H
+  - I
+  - J
+  - K
+  - L
+  - M
+  - 'N'
+  - O
+  - P
+  - Q
+  - R
+  - S
+  - T
+  - U
+  - W
+  - 'Y'
+  - Z
+  - a
+  - b
+  - c
+  - d
+  - e
+  - f
+  - g
+  - h
+  - i
+  - j
+  - k
+  - l
+  - m
+  - 'n'
+  - o
+  - p
+  - q
+  - r
+  - s
+  - t
+  - u
+  - v
+  - w
+  - x
+  - 'y'
+  - z
+  - à
+  - è
+  - é
+  - ô
+  - ù
+  - ŋ
+  - Ɔ
+  - Ɛ
+  - ɔ
+  - ɛ
+  - ɲ
+nemo_version: 2.1.0
+decoding:
+  strategy: greedy_batch
+  preserve_alignments: null
+  compute_timestamps: null
+  word_seperator: ' '
+  segment_seperators:
+  - .
+  - '!'
+  - '?'
+  segment_gap_threshold: null
+  ctc_timestamp_type: all
+  batch_dim_index: 0
+  greedy:
+    preserve_alignments: false
+    compute_timestamps: false
+    preserve_frame_confidence: false
+    confidence_method_cfg:
+      name: entropy
+      entropy_type: tsallis
+      alpha: 0.33
+      entropy_norm: exp
+      temperature: DEPRECATED
+    ngram_lm_model: null
+    ngram_lm_alpha: 0.0
+    boosting_tree:
+      model_path: null
+      key_phrases_file: null
+      key_phrases_list: null
+      context_score: 1.0
+      depth_scaling: 1.0
+      unk_score: 0.0
+      final_eos_score: 1.0
+      score_per_phrase: 0.0
+      source_lang: en
+      use_triton: true
+      uniform_weights: false
+      use_bpe_dropout: false
+      num_of_transcriptions: 5
+      bpe_alpha: 0.3
+    boosting_tree_alpha: 0.0
+    allow_cuda_graphs: true
+  beam:
+    beam_size: 4
+    search_type: default
+    preserve_alignments: false
+    compute_timestamps: false
+    return_best_hypothesis: true
+    allow_cuda_graphs: true
+    beam_alpha: 1.0
+    beam_beta: 0.0
+    beam_threshold: 20.0
+    kenlm_path: null
+    ngram_lm_alpha: 1.0
+    ngram_lm_model: null
+    boosting_tree:
+      model_path: null
+      key_phrases_file: null
+      key_phrases_list: null
+      context_score: 1.0
+      depth_scaling: 1.0
+      unk_score: 0.0
+      final_eos_score: 1.0
+      score_per_phrase: 0.0
+      source_lang: en
+      use_triton: true
+      uniform_weights: false
+      use_bpe_dropout: false
+      num_of_transcriptions: 5
+      bpe_alpha: 0.3
+    boosting_tree_alpha: 0.0
+    flashlight_cfg:
+      lexicon_path: null
+      boost_path: null
+      beam_size_token: 16
+      beam_threshold: 20.0
+      unk_weight: -.inf
+      sil_weight: 0.0
+    pyctcdecode_cfg:
+      beam_prune_logp: -10.0
+      token_min_logp: -5.0
+      prune_history: false
+      hotwords: null
+      hotword_weight: 10.0
+  wfst:
+    beam_size: 4
+    search_type: riva
+    return_best_hypothesis: true
+    preserve_alignments: false
+    compute_timestamps: false
+    decoding_mode: nbest
+    open_vocabulary_decoding: false
+    beam_width: 10.0
+    lm_weight: 1.0
+    device: cuda
+    arpa_lm_path: null
+    wfst_lm_path: null
+    riva_decoding_cfg: {}
+    k2_decoding_cfg:
+      search_beam: 20.0
+      output_beam: 10.0
+      min_active_states: 30
+      max_active_states: 10000
+  confidence_cfg:
+    preserve_frame_confidence: false
+    preserve_token_confidence: false
+    preserve_word_confidence: false
+    exclude_blank: true
+    aggregation: min
+    tdt_include_duration: false
+    method_cfg:
+      name: entropy
+      entropy_type: tsallis
+      alpha: 0.33
+      entropy_norm: exp
+      temperature: DEPRECATED
+  temperature: 1.0
+test_ds:
+  manifest_filepath: ./an-be-kalan-bench/test-manifest.jsonl
+  sample_rate: 16000
+  max_duration: 30
+  batch_size: 32
+  num_workers: 16
+  shuffle: false
+  normalize_transcripts: false
+  labels:
+  - ' '
+  - ''''
+  - '-'
+  - A
+  - B
+  - C
+  - E
+  - F
+  - G
+  - H
+  - I
+  - J
+  - K
+  - L
+  - M
+  - 'N'
+  - O
+  - P
+  - Q
+  - R
+  - S
+  - T
+  - U
+  - W
+  - 'Y'
+  - Z
+  - a
+  - b
+  - c
+  - d
+  - e
+  - f
+  - g
+  - h
+  - i
+  - j
+  - k
+  - l
+  - m
+  - 'n'
+  - o
+  - p
+  - q
+  - r
+  - s
+  - t
+  - u
+  - v
+  - w
+  - x
+  - 'y'
+  - z
+  - à
+  - è
+  - é
+  - ô
+  - ù
+  - ŋ
+  - Ɔ
+  - Ɛ
+  - ɔ
+  - ɛ
+  - ɲ

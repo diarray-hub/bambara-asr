@@ -1,0 +1,13 @@
+# Draft paper section: Spectrogram augmentation
+
+The augmented experiment variants used two NeMo spectrogram masking implementations, applied during training to normalized mel-spectrogram features rather than to the audio waveform. [Park et al. (2019)](https://arxiv.org/abs/1904.08779) originally proposed time warping, frequency masking, and time masking. Our Soloni experiments used the masking portion only: four frequency masks and ten time masks in the augmented runs. NeMo's `SpecAugment` samples each mask's position and width. The released Soloni configuration records a frequency-width limit of 27 mel bins and a time-width limit of 0.1 of the utterance's time frames. Its Exp3 checkpoint has both mask counts set to zero, as expected for that unaugmented run. The augmented-run mask counts are reported in the technical report, while their exact invocation should be checked against retained run commands or logs.
+
+For QuartzNet, the augmented variants used NeMo `SpecCutout`, which masks rectangular time-frequency patches. The technical report specifies ten rectangular masks in the augmented runs. The released Exp3 configuration records maximum rectangle dimensions of 50 mel bins by 120 time frames and `rect_masks: 0` for this unaugmented checkpoint. A rectangle covers a subset of both axes simultaneously; this differs from Soloni's separate full-axis frequency and time masks. Neither model configuration specifies time warping. These are architecture-specific variants of spectrogram masking, not a shared 4/10/10 policy applied to both models.
+
+The augmentation is a training-time regularizer and is disabled for deterministic evaluation. The benchmark point estimates do not establish a statistically reliable gain or loss from augmentation on their own. The benchmark also contributed duration-filtered validation recordings for checkpoint selection, so comparisons on that test set need the corresponding limitation stated.
+
+## Verification record
+
+- Config snapshots: `an-be-kalan-bench/review/model_configs/soloni-be-kalan-v0.yaml` and `an-be-kalan-bench/review/model_configs/anbekalanNet.yaml`, extracted with `ASRModel.from_pretrained(..., return_config=True)` in September 2026.
+- Training CLI: `an-be-kalan-bench/scripts/train.py`, which applies supplied mask overrides and rebuilds the augmentation module.
+- NeMo implementation: `SpecAugment` and `SpecCutout` in `nemo.collections.asr.parts.submodules.spectr_augment` (checked in the available NeMo 3.0.0 environment). The exact historical NeMo 2.5.0 implementation should be confirmed if a line-by-line reproducibility claim is needed.
