@@ -178,8 +178,9 @@ Performance is disaggregated below across overall results, specific age cohorts,
 | Age Cohort | Utterance Count | Baseline WER (%) | Fine-Tuned WER (%) | Key Insights |
 | --- | --- | --- | --- | --- |
 | **Early Childhood (<10 yrs)** | 93 | 56.0% | **29.0%** | Remains the single largest acoustic error cluster.|
-| **Target Cohort (10-15 yrs)** | 527 | — | **22.0%** | Majority representation; stable acoustic profiles.|
+| **Target Cohort (10-15 yrs)** | 527 |0.39 | **22.0%** | Majority representation; stable acoustic profiles.|
 
 ## License
 
 This model is released under the **CC-BY-4.0** license.
+

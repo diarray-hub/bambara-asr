@@ -9,3 +9,5 @@ rlnf/reward/train_reward_model.ipynb
 test_rlnf.ipynb
 rlnf/experiments/rlnf-export.tar.gz
 FIX_NEMO3_BACKWARDS
+an-be-kalan-bench/docs/*
+slu-ic-slot-filling/data/mobilebamking_voice_collection_export.json
