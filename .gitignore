@@ -11,4 +11,5 @@ rlnf/experiments/rlnf-export.tar.gz
 FIX_NEMO3_BACKWARDS
 an-be-kalan-bench/docs/*
 an-be-kalan-bench/.evaluation/
+an-be-kalan-bench/review/
 slu-ic-slot-filling/data/mobilebamking_voice_collection_export.json
