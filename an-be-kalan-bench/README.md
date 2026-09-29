@@ -25,7 +25,7 @@ The dataset contains a small `main` split and a much larger `duplicate` split wi
 
 ## Statistical review on a cloud machine
 
-The review evidence and draft paper sections are in [`review/`](review/). The released Exp3 model configurations are saved in `an-be-kalan-bench/review/model_configs/`. The scripts were smoke-tested with Python 3.12 and NeMo 3.0.0; NeMo 2.5.0 is pinned for the original training environment but is not required by these evaluation scripts. Install a compatible NeMo ASR environment and `review-requirements.txt` for the dataset download. The scripts patch a known decoding-schema difference when newer NeMo loads the Soloni checkpoint. In the tested NeMo 3.0.0 environment, model loading required `NUMBA_DISABLE_JIT=1` to avoid a Numba `no locator available` error.
+Local review notes and released Exp3 configuration snapshots are kept in the Git-ignored `an-be-kalan-bench/review/` directory. The scripts were smoke-tested with Python 3.12 and NeMo 3.0.0; NeMo 2.5.0 is pinned for the original training environment but is not required by these evaluation scripts. Install a compatible NeMo ASR environment and `review-requirements.txt` for the dataset download. The scripts patch a known decoding-schema difference when newer NeMo loads the Soloni checkpoint. In the tested NeMo 3.0.0 environment, model loading required `NUMBA_DISABLE_JIT=1` to avoid a Numba `no locator available` error.
 
 Run from the repository root:
 
