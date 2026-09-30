@@ -70,6 +70,8 @@ def cohort(row: dict) -> str | None:
         return "under_10"
     if 10 <= age <= 15:
         return "age_10_15"
+    if 16 <= age <= 20:
+        return "age_16_20"
     return None
 
 

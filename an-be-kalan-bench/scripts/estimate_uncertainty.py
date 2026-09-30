@@ -24,7 +24,7 @@ from eval_common import (
 )
 
 MODEL_IDS = {"soloni": SOLONI, "quartznet": QUARTZNET}
-COHORTS = ("overall", "under_10", "age_10_15")
+COHORTS = ("overall", "under_10", "age_10_15", "age_16_20")
 METRICS = (("wer", "word_errors", "reference_words"), ("cer", "character_errors", "reference_characters"))
 DEFAULT_DATA = Path("an-be-kalan-bench/.evaluation/data")
 DEFAULT_OUTPUT = Path("an-be-kalan-bench/.evaluation/results")
@@ -34,7 +34,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--method", choices=("bootstrap", "mc-dropout", "both"), default="both")
+    parser.add_argument("--method", choices=("bootstrap", "mc-dropout", "both"), default="bootstrap")
+    parser.add_argument("--cohort", choices=("all", *COHORTS), default="all",
+                        help="Select one cohort; a targeted run merges into existing CSV results")
     parser.add_argument("--runs", type=int, default=1024)
     parser.add_argument("--seed", type=int, default=20260929)
     parser.add_argument("--batch-size", type=int, default=16)
@@ -57,14 +59,24 @@ def metric_value(scores: list[dict], numerator: str, denominator: str) -> float:
     return sum(item[numerator] for item in scores) / bottom
 
 
-def selections(rows: list[dict]) -> dict[str, list[int]]:
+def selections(rows: list[dict], requested: str = "all") -> dict[str, list[int]]:
     output = {name: [] for name in COHORTS}
     for index, row in enumerate(rows):
         output["overall"].append(index)
         name = cohort(row)
         if name:
             output[name].append(index)
-    return output
+    return output if requested == "all" else {requested: output[requested]}
+
+
+def merge_results(path: Path, new_rows: list[dict], targeted: bool) -> list[dict]:
+    """Preserve previous cohorts and methods when running one cohort."""
+    if not targeted or not path.exists():
+        return new_rows
+    with path.open(encoding="utf-8", newline="") as handle:
+        previous = list(csv.DictReader(handle))
+    replaced = {(item["method"], item["cohort"]) for item in new_rows}
+    return [item for item in previous if (item["method"], item["cohort"]) not in replaced] + new_rows
 
 
 def write_csv(path: Path, fields: list[str], rows: list[dict]) -> None:
@@ -86,12 +98,12 @@ def summarize(method: str, model: str, group: str, metric: str, estimate: float 
 
 
 def run_bootstrap(rows: list[dict], deterministic: dict[str, list[dict]], runs: int,
-                  seed: int) -> tuple[list[dict], list[dict]]:
+                  seed: int, requested_cohort: str = "all") -> tuple[list[dict], list[dict]]:
     scores = {
         model: [score(row["text"], prediction["hypothesis"]) for row, prediction in zip(rows, predictions)]
         for model, predictions in deterministic.items()
     }
-    selected = selections(rows)
+    selected = selections(rows, requested_cohort)
     summaries, replicates = [], []
     for group, indices in selected.items():
         by_book = defaultdict(list)
@@ -139,8 +151,8 @@ def run_bootstrap(rows: list[dict], deterministic: dict[str, list[dict]], runs: 
 
 def run_dropout(rows: list[dict], data_dir: Path, output_dir: Path, runs: int,
                 seed: int, batch_size: int, device: str,
-                deterministic: dict[str, list[dict]]) -> tuple[list[dict], list[dict]]:
-    selected = selections(rows)
+                deterministic: dict[str, list[dict]], requested_cohort: str = "all") -> tuple[list[dict], list[dict]]:
+    selected = selections(rows, requested_cohort)
     paths = [str(data_dir / row["audio_path"]) for row in rows]
     summaries, replicates = [], []
     # QuartzNet's published Jasper config has dropout=0.0 in every block.
@@ -256,16 +268,18 @@ def main() -> None:
 
     summaries, replicates = [], []
     if args.method in {"bootstrap", "both"}:
-        part_summaries, part_replicates = run_bootstrap(rows, deterministic, args.runs, args.seed)
+        part_summaries, part_replicates = run_bootstrap(rows, deterministic, args.runs, args.seed, args.cohort)
         summaries.extend(part_summaries)
         replicates.extend(part_replicates)
     if args.method in {"mc-dropout", "both"}:
         part_summaries, part_replicates = run_dropout(
-            rows, data_dir, output_dir, args.runs, args.seed, args.batch_size, device, deterministic
+            rows, data_dir, output_dir, args.runs, args.seed, args.batch_size, device, deterministic, args.cohort
         )
         summaries.extend(part_summaries)
         replicates.extend(part_replicates)
 
+    summaries = merge_results(output_dir / "summary.csv", summaries, args.cohort != "all")
+    replicates = merge_results(output_dir / "replicates.csv", replicates, args.cohort != "all")
     write_csv(output_dir / "summary.csv",
               ["method", "model", "cohort", "metric", "estimate", "lower_95", "upper_95",
                "n_utterances", "n_books", "runs", "note"], summaries)
@@ -284,12 +298,12 @@ def main() -> None:
     lines = ["# An bɛ kalan uncertainty report", "", f"Dataset: `{data_info['dataset']}` revision `{data_info['revision']}`; {len(rows)} utterances.",
              f"Models: `{SOLONI}` revision `{model_revisions['soloni']}` (CTC branch) and `{QUARTZNET}` revision `{model_revisions['quartznet']}` (greedy CTC).",
              f"Scoring: {identity['scoring']}; corpus error rate = total edit errors / total reference units.",
-             f"Method: {args.method}; {args.runs} replicates; seed {args.seed}; device {device}; NeMo {nemo.__version__}; PyTorch {torch.__version__}.", "",
+             f"Latest run: {args.method}, cohort {args.cohort}, {args.runs} replicates; seed {args.seed}; device {device}; NeMo {nemo.__version__}; PyTorch {torch.__version__}.", "",
              "## Results", "", "| Method | Cohort | Metric | Model | Estimate | 95% range | Utterances | Books | Note |",
              "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |"]
     for item in summaries:
-        estimate = f"{item['estimate']:.3f}" if item["estimate"] != "" else "—"
-        interval = (f"{item['lower_95']:.3f} to {item['upper_95']:.3f}"
+        estimate = f"{float(item['estimate']):.3f}" if item["estimate"] != "" else "—"
+        interval = (f"{float(item['lower_95']):.3f} to {float(item['upper_95']):.3f}"
                     if item["lower_95"] != "" else "—")
         lines.append(f"| {item['method']} | {item['cohort']} | {item['metric']} | {item['model']} | "
                      f"{estimate} | {interval} | {item['n_utterances']} | {item['n_books']} | {item['note']} |")

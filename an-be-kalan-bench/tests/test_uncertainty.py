@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from estimate_uncertainty import run_bootstrap
+from estimate_uncertainty import merge_results, run_bootstrap, write_csv
 from eval_common import cohort, score
 from select_error_review import choose_cases
 
@@ -42,6 +42,34 @@ class EvaluationChecks(unittest.TestCase):
         self.assertEqual({band: sum(item["band"] == band for item in selected)
                           for band in ("highest", "middle", "lowest_positive")},
                          {"highest": 10, "middle": 10, "lowest_positive": 10})
+
+    def test_older_cohort_and_targeted_result_merge(self):
+        from tempfile import TemporaryDirectory
+
+        rows = [
+            {"id": f"u{i}", "text": "a b", "book": f"book-{i % 2}", "speaker_age": age}
+            for i, age in enumerate((16, 19, 12, 8))
+        ]
+        predictions = {
+            "soloni": [{"id": row["id"], "hypothesis": "a b"} for row in rows],
+            "quartznet": [{"id": row["id"], "hypothesis": "a c"} for row in rows],
+        }
+        summary, replicates = run_bootstrap(rows, predictions, 8, 7, "age_16_20")
+        self.assertEqual({item["cohort"] for item in summary + replicates}, {"age_16_20"})
+        self.assertEqual({item["n_utterances"] for item in summary}, {2})
+        self.assertEqual({item["n_books"] for item in summary}, {2})
+        self.assertEqual(cohort({"speaker_age": 20}), "age_16_20")
+        self.assertIsNone(cohort({"speaker_age": None}))
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "summary.csv"
+            previous = [
+                {"method": "book_bootstrap", "cohort": "overall", "value": "old"},
+                {"method": "book_bootstrap", "cohort": "age_16_20", "value": "stale"},
+                {"method": "mc_dropout", "cohort": "age_16_20", "value": "keep"},
+            ]
+            write_csv(path, ["method", "cohort", "value"], previous)
+            updated = merge_results(path, [{"method": "book_bootstrap", "cohort": "age_16_20", "value": "new"}], True)
+            self.assertEqual([item["value"] for item in updated], ["old", "keep", "new"])
 
 
 if __name__ == "__main__":
