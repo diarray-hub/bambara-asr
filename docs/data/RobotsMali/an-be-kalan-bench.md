@@ -80,82 +80,131 @@ configs:
 This dataset is a collection of READ Bambara text based on educational children's books from RobotsMali's GAIFE project. It is designed to support the training and benchmarking of Automatic Speech Recognition (ASR) models, with a particular focus on child speech, regional acoustics, and repetitive text structures (inherent to the domain).
 
 The dataset is structured into two separate subsets to support specialized training and evaluation paradigms:
-1. **`main`**: Contains non-overlapping text and speakers divided into standard training and test splits.
+1. **`main`**: Contains separate training and test splits with disjoint recorded book titles and speaker IDs. Speaker IDs may not reliably identify distinct people across sessions.
 2. **`duplicate`**: A highly dense, multi-speaker redundant training set featuring multiple recordings of the same source literature by a diverse pool of speakers.
 
 ---
 
 ## Dataset Architecture & Splits
 
-The dataset enforces a strict split philosophy to ensure structural and evaluation integrity. A book present in the test split (the benchmark) **never** appears in another split. Though there might be rare speaker overlap due to inconsistent speaker identity handling araising from the data collection pipeline.
+The release has `main/train`, `main/test`, and `duplicate/train`. Exact `BookTitle` strings do not overlap between the test and either training split. The two training splits contain the same 22 title strings. Speaker IDs are metadata identifiers rather than verified distinct people; the separate `main` and `duplicate` training sets share IDs, while the test has no ID overlap with either training split at this revision. Dataset-derived totals below use the published `duration` metadata and count each utterance, including repeated readings.
 
-### Summary Statistics Table
+### Summary Statistics
 
-| Metric | `main` (Train) | `main` (Test) | `duplicate` (Train) | Combined |
+| Metric | `main/train` | `main/test` | `duplicate/train` | All published rows |
 | :--- | :---: | :---: | :---: | :---: |
-| **Total Unique Speakers** | 8 | 11 | 113 | 113 |
-| **Mean Audio Duration** | 4.86s | 4.42s | 7.73s | 4.74s |
-| **Audio Duration Range** | 0.72s – 25.60s | 0.32s – 16.48s | 0.08s – 37.52s | 0.08s – 37.52s |
-| **Mean Sentence Length** | 8.06 words | 7.18 words | 7.85 words | 7.85 words |
-| **Sentence Length Range** | 1 – 26 words | 1 – 21 words | 1 – 26 words | 1 – 26 words |
-| **Missing Speaker Metadata**| 0 utterances | 38 utterances | 0 utterances | 0 utterances |
+| Utterances | 1,203 | 724 | 33,481 | 35,408 |
+| Total duration | 1.624 h | 0.889 h | 44.018 h | 46.531 h |
+| Distinct speaker IDs | 8 | 11 | 113 | 124 |
+| Distinct book titles | 22 | 17 | 22 | 39 |
+| Mean audio duration | 4.86 s | 4.42 s | 4.73 s | 4.73 s |
+| Audio duration range | 0.72–25.60 s | 0.32–16.48 s | 0.08–37.52 s | 0.08–37.52 s |
+| Mean sentence length | 8.06 words | 7.18 words | 7.85 words | 7.84 words |
+| Sentence length range | 1–26 words | 1–21 words | 1–26 words | 1–26 words |
+| Rows missing any age, gender, or speaker ID | 0 | 38 | 0 | 38 |
 
-### Demographic Distributions
+The two training splits total **34,684 utterances and 45.642 h** (`main/train`: 1.624 h; `duplicate/train`: 44.018 h). All published rows, including the 0.889 h test split, sum to 46.531 h. These are retained dataset durations, not the 55 hours of raw campaign recordings.
 
-* **Age Profile**: The dataset exclusively features children and young adolescents. Across the entire combined footprint, speaker age ranges from a **minimum of 8 to a maximum of 19 years old**.
-* **Gender Splits (Combined)**: **Female**: 17,471 utterances | **Male**: 17,213 utterances.
-* **Gender Splits (`main` Test)**: **Female**: 522 | **Male**: 164 | **Unknown**: 38.
-* **Gender Splits (`main` Train)**: **Female**: 783 | **Male**: 420.
+### Demographic distributions
 
----
+Known `speakerAge` values span **5–19** in this release. The test split has 2 utterances labelled age 5; these are metadata values that merit source-record verification. The test also has 38 rows with unknown age and gender. The age bands below count utterances, not unique children; 10–15 and 16–20 include both endpoints.
 
-## Detailed Book Inventory & Duplicate Metrics
+| Age band | `main/train` | `main/test` | `duplicate/train` | All published rows |
+| :--- | :---: | :---: | :---: | :---: |
+| Under 10 | 67 | 93 | 1,782 | 1,942 |
+| 10–15 | 1,097 | 527 | 17,459 | 19,083 |
+| 16–20 | 39 | 66 | 14,240 | 14,345 |
+| Unknown | 0 | 38 | 0 | 38 |
 
-The duplicates subset is derived from 20 core books.
+| Gender metadata | `main/train` | `main/test` | `duplicate/train` | All published rows |
+| :--- | :---: | :---: | :---: | :---: |
+| Female | 783 | 522 | 16,688 | 17,993 |
+| Male | 420 | 164 | 16,793 | 17,377 |
+| Unknown | 0 | 38 | 0 | 38 |
 
-### `duplicate` (Train) Subset Book Inventory (44.02 h)
+At the current release revision, the test duration field places 692/724 utterances (95.6%) at or below 10 s and 719/724 (99.3%) at or below 15 s. These are metadata filter counts, not proof of a historical validation run's exact row count.
 
-| Book Title | Total Reads (Proxied) | Unique Speaker IDs | Female Reads | Male Reads | Age Distribution Split (<10 / 10-15 / 15-20) |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Aminata Fari Fisayara** | 36 | 34 | 17 | 19 | 3 / 19 / 14 |
-| **Bakɔrɔnin Saba** | 37 | 36 | 18 | 19 | 3 / 20 / 14 |
-| **Bɛnkɛ Tɔm Ka So** | 26 | 24 | 14 | 12 | 1 / 13 / 12 |
-| **Dawuda ni a Mɔkɛ** | 30 | 30 | 15 | 15 | 1 / 15 / 14 |
-| **Dɔgɔtɔrɔ ni Farafinfurabɔla a** | 23 | 22 | 14 | 9 | 2 / 10 / 11 |
-| **Filomani** | 32 | 31 | 18 | 14 | 2 / 16 / 14 |
-| **Gawusu ni Masakɛ Sidiki** | 29 | 29 | 14 | 15 | 3 / 16 / 10 |
-| **Gerenadi-Feerew** | 29 | 27 | 14 | 15 | 1 / 17 / 11 |
-| **Gesedala Musa** | 27 | 26 | 15 | 12 | 2 / 15 / 10 |
-| **Gundola Kuma** | 31 | 27 | 18 | 13 | 3 / 18 / 10 |
-| **Kalo la Taama** | 26 | 25 | 13 | 13 | 1 / 15 / 10 |
-| **Kan Orobotik** | 27 | 27 | 15 | 12 | 2 / 12 / 13 |
-| **Korokara Yɛrɛdɔnbali** | 24 | 24 | 12 | 12 | 0 / 14 / 10 |
-| **Kurun** | 25 | 25 | 11 | 14 | 0 / 14 / 11 |
-| **Lamini Ka Don Kɛrɛnkɛrɛnnen** | 24 | 24 | 10 | 14 | 1 / 13 / 10 |
-| **Mama ka Sama** | 24 | 24 | 10 | 14 | 0 / 13 / 11 |
-| **Ne ni Mama ka Gafe Kalan** | 27 | 26 | 12 | 15 | 3 / 16 / 8 |
-| **Subahana Daga** | 29 | 28 | 12 | 17 | 2 / 17 / 10 |
-| **Sɔminiminɛnw** | 29 | 29 | 13 | 16 | 3 / 13 / 13 |
-| **Yɛlɛ Ka Di Npogotiginin Mi Ye** | 21 | 20 | 9 | 12 | 0 / 13 / 8 |
+## Book inventory and age distribution
 
-### `main` (Train) Subset Book Inventory (1.62 h)
-Made of unique readings of 22 books, the 20 books in `duplicate` + 2: 
-* *Saratu*
-* *Tulonkɛw*
+The table uses the exact published `BookTitle` strings. Ages are utterance counts in the order **under 10 / 10–15 / 16–20 / unknown**. `Speaker IDs` are distinct recorded identifiers within a title, not verified readers or complete-read counts.
 
-### Test Subset Book Inventory (0.89 h)
-The following distinct literary works compose the `main` test subset footprint (no repetition):
-* *Anw Bɛ Baara Kɛ!*
-* *Bako Cɛnin Ŋaniya Ɲuman*
-* *Bama Miirina*
-* *Cɛni Tulogɛlɛn*
-* *Donfɛnw*
-* *Fali Nalonma Ni Ba Kegunma ani Ɲininkaliw ni u j*
-* *Jate*
-* *Kogo*
-* *Kulɔriw*
-* *Ne ni Papa ka Gafe Kalan*
-* *Ni a tun bɛ se ...*
+### `main/train` — 22 titles
+
+| BookTitle | Utterances | Duration (h) | Speaker IDs | Age counts (<10 / 10–15 / 16–20 / unknown) |
+| :--- | ---: | ---: | ---: | :---: |
+| Aminata Fari Fisayara | 68 | 0.089 | 2 | 67 / 1 / 0 / 0 |
+| Bakɔrɔnin Saba | 45 | 0.057 | 1 | 0 / 45 / 0 / 0 |
+| Bɛnkɛ Tɔm Ka So | 124 | 0.182 | 2 | 0 / 124 / 0 / 0 |
+| Dawuda ni a Mɔkɛ | 38 | 0.054 | 1 | 0 / 38 / 0 / 0 |
+| Dɔgɔtɔrɔ ni Farafinfurabɔla a | 97 | 0.144 | 1 | 0 / 97 / 0 / 0 |
+| Filomani | 65 | 0.089 | 1 | 0 / 65 / 0 / 0 |
+| Gawusu ni Masakɛ Sidiki | 51 | 0.071 | 1 | 0 / 51 / 0 / 0 |
+| Gerenadi-Feerew | 47 | 0.081 | 1 | 0 / 47 / 0 / 0 |
+| Gesedala Musa | 35 | 0.045 | 1 | 0 / 35 / 0 / 0 |
+| Gundola Kuma | 59 | 0.064 | 2 | 0 / 59 / 0 / 0 |
+| Kalo la Taama | 64 | 0.077 | 1 | 0 / 64 / 0 / 0 |
+| Kan Orobotik | 39 | 0.046 | 1 | 0 / 39 / 0 / 0 |
+| Korokara Yɛrɛdɔnbali | 74 | 0.099 | 2 | 0 / 74 / 0 / 0 |
+| Kurun | 52 | 0.059 | 1 | 0 / 52 / 0 / 0 |
+| Lamini Ka Don Kɛrɛnkɛrɛnnen | 77 | 0.099 | 1 | 0 / 77 / 0 / 0 |
+| Mama ka Sama | 33 | 0.051 | 1 | 0 / 33 / 0 / 0 |
+| Ne ni Mama ka Gafe Kalan | 38 | 0.037 | 1 | 0 / 38 / 0 / 0 |
+| Saratu | 55 | 0.101 | 1 | 0 / 55 / 0 / 0 |
+| Subahana Daga | 39 | 0.064 | 1 | 0 / 0 / 39 / 0 |
+| Sɔminiminɛnw | 28 | 0.023 | 1 | 0 / 28 / 0 / 0 |
+| Tulonkɛw | 51 | 0.057 | 2 | 0 / 51 / 0 / 0 |
+| Yɛlɛ Ka Di Npogotiginin Mi Ye | 24 | 0.036 | 1 | 0 / 24 / 0 / 0 |
+
+### `main/test` — 17 titles
+
+| BookTitle | Utterances | Duration (h) | Speaker IDs | Age counts (<10 / 10–15 / 16–20 / unknown) |
+| :--- | ---: | ---: | ---: | :---: |
+| Anw Bɛ Baara Kɛ! | 55 | 0.106 | 3 | 50 / 5 / 0 / 0 |
+| Ayisa ye nkalontigɛ dabila | 55 | 0.076 | 2 | 0 / 54 / 1 / 0 |
+| Bako Cɛnin Ŋaniya Ɲuman | 46 | 0.079 | 1 | 0 / 46 / 0 / 0 |
+| Bama Miirina | 24 | 0.024 | 2 | 22 / 0 / 1 / 1 |
+| Cɛni Tulogɛlɛn | 46 | 0.057 | 1 | 0 / 9 / 0 / 37 |
+| Denmisɛnya Kojuguw | 37 | 0.029 | 2 | 0 / 37 / 0 / 0 |
+| Donfɛnw | 27 | 0.026 | 1 | 0 / 27 / 0 / 0 |
+| Fali Nalonma Ni Ba Kegunma ani Ɲininkaliw ni u j | 39 | 0.057 | 2 | 0 / 39 / 0 / 0 |
+| Jate | 36 | 0.039 | 1 | 0 / 0 / 36 / 0 |
+| Ji Poyi Yɔrɔ | 72 | 0.058 | 1 | 0 / 72 / 0 / 0 |
+| Kewale Numanw | 26 | 0.032 | 1 | 0 / 26 / 0 / 0 |
+| Kogo | 39 | 0.075 | 1 | 0 / 39 / 0 / 0 |
+| Kulɔriw | 30 | 0.033 | 1 | 0 / 30 / 0 / 0 |
+| Mali kunkanko | 92 | 0.083 | 1 | 0 / 92 / 0 / 0 |
+| Namasatigi | 21 | 0.027 | 1 | 21 / 0 / 0 / 0 |
+| Ne ni Papa ka Gafe Kalan | 42 | 0.037 | 3 | 0 / 14 / 28 / 0 |
+| Ni a tun bɛ se ... | 37 | 0.051 | 1 | 0 / 37 / 0 / 0 |
+
+### `duplicate/train` — 22 titles
+
+| BookTitle | Utterances | Duration (h) | Speaker IDs | Age counts (<10 / 10–15 / 16–20 / unknown) |
+| :--- | ---: | ---: | ---: | :---: |
+| Aminata Fari Fisayara | 2,420 | 2.792 | 38 | 172 / 1230 / 1018 / 0 |
+| Bakɔrɔnin Saba | 1,596 | 2.131 | 38 | 126 / 790 / 680 / 0 |
+| Bɛnkɛ Tɔm Ka So | 3,212 | 3.687 | 28 | 111 / 1503 / 1598 / 0 |
+| Dawuda ni a Mɔkɛ | 1,179 | 1.585 | 31 | 40 / 590 / 549 / 0 |
+| Dɔgɔtɔrɔ ni Farafinfurabɔla a | 2,106 | 2.868 | 24 | 194 / 850 / 1062 / 0 |
+| Filomani | 2,124 | 2.552 | 32 | 134 / 1050 / 940 / 0 |
+| Gawusu ni Masakɛ Sidiki | 1,473 | 2.022 | 30 | 148 / 856 / 469 / 0 |
+| Gerenadi-Feerew | 1,330 | 2.100 | 29 | 48 / 753 / 529 / 0 |
+| Gesedala Musa | 966 | 1.349 | 27 | 72 / 536 / 358 / 0 |
+| Gundola Kuma | 1,710 | 2.257 | 28 | 177 / 941 / 592 / 0 |
+| Kalo la Taama | 1,731 | 2.111 | 27 | 67 / 994 / 670 / 0 |
+| Kan Orobotik | 1,200 | 1.833 | 30 | 83 / 581 / 536 / 0 |
+| Korokara Yɛrɛdɔnbali | 1,873 | 2.357 | 25 | 0 / 1094 / 779 / 0 |
+| Kurun | 1,314 | 1.859 | 27 | 0 / 736 / 578 / 0 |
+| Lamini Ka Don Kɛrɛnkɛrɛnnen | 1,836 | 2.491 | 25 | 26 / 985 / 825 / 0 |
+| Mama ka Sama | 826 | 1.415 | 25 | 0 / 442 / 384 / 0 |
+| Ne ni Mama ka Gafe Kalan | 1,167 | 1.367 | 27 | 122 / 722 / 323 / 0 |
+| Saratu | 1,360 | 2.353 | 26 | 58 / 672 / 630 / 0 |
+| Subahana Daga | 1,198 | 1.580 | 29 | 84 / 652 / 462 / 0 |
+| Sɔminiminɛnw | 1,236 | 1.160 | 32 | 120 / 564 / 552 / 0 |
+| Tulonkɛw | 1,094 | 1.285 | 20 | 0 / 605 / 489 / 0 |
+| Yɛlɛ Ka Di Npogotiginin Mi Ye | 530 | 0.867 | 20 | 0 / 313 / 217 / 0 |
+
+Statistics above were computed from all metadata rows in the dataset's Parquet shards at revision [`95cf3103994ac13c13e086518c320a614cf75085`](https://huggingface.co/datasets/RobotsMali/an-be-kalan-bench/tree/95cf3103994ac13c13e086518c320a614cf75085). Sentence length counts whitespace-separated words; duration uses the published `duration` field. Audio was not decoded for this metadata audit.
 
 ---
 
@@ -165,17 +214,17 @@ When developing models on this dataset, users should balance its unique profile 
 
 ### 1. The High-Volume Duplication Matrix
 * **As a Feature:** Due to the severe scarcity of open-source text and educational literature in Bambara, collecting deep audio variations on a finite set of text was a deliberate design choice. This split provides a robust playground for specific speech experiments, such as **acoustic multi-speaker verification, text-constrained acoustic profiling, and downstream speech representation probing**.
-* **As a Weakness:** The textual diversity in the duplicate subset is inherently bottlenecked by the underlying literature. Models trained aggressively on the duplicate split without constraint can rapidly overfit to the vocabulary, tone structures, and phonetic bounds of these 20 specific books.
+* **As a Weakness:** The textual diversity in the duplicate subset is inherently bottlenecked by the underlying literature. Models trained aggressively on the duplicate split without constraint can rapidly overfit to the vocabulary, tone structures, and phonetic bounds of these 22 recorded book titles.
 
 ### 2. Known Metadata Inconsistencies
-* **The Identifier Inconsistency:** The log metrics show 113 unique speaker IDs in the combined dataset slice. However, on-the-ground project coordinators reported a real-world count of **approximately 60 unique speakers**.
+* **The Identifier Inconsistency:** The release has 113 distinct speaker IDs across its training splits and 124 across all splits. On-the-ground project coordinators reported approximately 60 actual speakers; that estimate has not been verified from these metadata rows.
 * **Implication:** This discrepancy highlights an operational metadata inflation error where individual speakers were assigned differing tracking IDs across different recording sessions, days, or environments. Users should exercise caution when benchmarking strict zero-shot speaker verification algorithms on this dataset without manual speaker clustering.
 
 ---
 
 ## Dataset Format
 
-Data manifests are deployed using the standard JSON Lines (`.jsonl`) configuration natively compatible with deep learning toolkits like NVIDIA NeMo and ESPnet:
+The Hugging Face release uses Parquet shards with `BookTitle`, `sentenceID`, `text`, `speakerAge`, `speakerGender`, `speakerID`, `duration`, and an `audio` feature. A local export can derive a NeMo-compatible JSON Lines (`.jsonl`) manifest. In that derived format, `audio_filepath` is a local file path, not a field of the published Parquet rows. For example:
 
 ```json
 {
@@ -188,7 +237,6 @@ Data manifests are deployed using the standard JSON Lines (`.jsonl`) configurati
   "duration": 2.56,
   "audio_filepath": "data/audios/dup_Aminata_Fari_Fisayara_1_1200.wav"
 }
-
 ```
 
 ### Citation
